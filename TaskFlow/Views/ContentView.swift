@@ -50,6 +50,7 @@ struct ContentView: View {
             await repository.bootstrap()
             TaskFlowAppShortcuts.updateAppShortcutParameters()
             await EventLiveActivityCoordinator.reconcile(events: repository.calendarEvents)
+            await RoutineTimerCoordinator.reconcile()
             consumeSharedCaptureIfNeeded()
             if !repository.hasCompletedOnboarding {
                 isShowingOnboarding = true
@@ -80,6 +81,7 @@ struct ContentView: View {
             Task {
                 await repository.reloadExternalData()
                 await EventLiveActivityCoordinator.reconcile(events: repository.calendarEvents)
+                await RoutineTimerCoordinator.reconcile()
                 consumeSharedCaptureIfNeeded()
                 consumePendingIntentRoute()
             }
@@ -275,6 +277,7 @@ struct ContentView: View {
     }
 
     @State private var isImportingSharedNotes = false
+    @State private var isImportingReadingLinks = false
 
     private func consumeSharedCaptureIfNeeded() {
         if let defaults = UserDefaults(suiteName: "group.com.surratt.TaskFlow"),
@@ -287,6 +290,27 @@ struct ContentView: View {
                 }
                 let current = defaults.array(forKey: "TaskFlow.pendingSharedNotes") as? [String] ?? []
                 defaults.set(Array(current.dropFirst(notes.count)), forKey: "TaskFlow.pendingSharedNotes")
+            }
+        }
+        if let defaults = UserDefaults(suiteName: "group.com.surratt.TaskFlow"),
+           let links = defaults.stringArray(forKey: "TaskFlow.pendingReadingLinks"), !links.isEmpty,
+           !isImportingReadingLinks, repository.accessState == .granted {
+            isImportingReadingLinks = true
+            Task {
+                defer { isImportingReadingLinks = false }
+                var unsaved: [String] = []
+                for link in links {
+                    guard let url = URL(string: link) else { continue }
+                    if !(await repository.addSharedReadingLink(url)) { unsaved.append(link) }
+                }
+                let current = defaults.stringArray(forKey: "TaskFlow.pendingReadingLinks") ?? []
+                defaults.set(Array(current.dropFirst(links.count)), forKey: "TaskFlow.pendingReadingLinks")
+                // Without a Reading list, offer the link as a regular capture instead of dropping it.
+                if repository.preferredReadingListID == nil, let first = unsaved.first, defaults.dictionary(forKey: "TaskFlow.pendingShareCapture") == nil {
+                    sharedCaptureText = first
+                    sharedCaptureKind = "Task"
+                    showsSharedCapture = true
+                }
             }
         }
         guard let defaults = UserDefaults(suiteName: "group.com.surratt.TaskFlow"),

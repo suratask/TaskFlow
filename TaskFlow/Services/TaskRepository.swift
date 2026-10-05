@@ -235,6 +235,8 @@ final class TaskRepository {
             if completionChanged {
                 await refreshTasks()
                 await rescheduleNotifications()
+            } else if type == .bills {
+                await rescheduleNotifications() // Deadline dates feed reminders.
             }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
@@ -1978,7 +1980,7 @@ final class TaskRepository {
         setListProfile(profile, for: listID)
     }
 
-    func addReadingLink(title: String, url: URL, listID: String) async -> Bool {
+    func addReadingLink(title: String, url: URL, listID: String, metadata: ReadingLinkMetadata? = nil) async -> Bool {
         guard !isUndoing, ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return false }
         var draft = TaskDraft(listID: listID)
         draft.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1986,7 +1988,7 @@ final class TaskRepository {
         do {
             let id = try reminderService.saveTask(draft, metadataStore: metadataStore)
             var details = SpecializedTaskDetails()
-            details.fields = ["Source Link": url.absoluteString, "Progress": "Saved"]
+            details.fields = (metadata?.fields ?? [:]).merging(["Source Link": url.absoluteString, "Progress": "Saved"]) { _, required in required }
             specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = details
             metadataStore.specializedTasks = specializedTasks
             taskRedo = nil
@@ -1998,6 +2000,34 @@ final class TaskRepository {
     }
 
     /// Import a reviewed shopping batch with one reload and one undo action.
+    /// Open tasks marked Next Action in every Projects list, soonest due first.
+    var projectNextActions: [TaskItem] {
+        tasks.filter { !$0.isCompleted && listProfile($0.listID).type == .projects && specializedDetails($0).fields["Next Action"] == "Yes" }
+            .sorted { lhs, rhs in
+                switch (lhs.dueDate, rhs.dueDate) {
+                case let (left?, right?) where left != right: return left < right
+                case (.some, nil): return true
+                case (nil, .some): return false
+                default: return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                }
+            }
+    }
+
+    /// The Reading list shared links go to: the selected one, then the default list, then the first.
+    var preferredReadingListID: String? {
+        let reading = lists.filter { listProfile($0.id).type == .reading }
+        if case .list(let id) = selectedScope, reading.contains(where: { $0.id == id }) { return id }
+        return reading.first { $0.id == defaultListID }?.id ?? reading.first?.id
+    }
+
+    /// Saves a link shared from another app, filling in its title and details from the page.
+    func addSharedReadingLink(_ url: URL) async -> Bool {
+        guard let listID = preferredReadingListID else { return false }
+        let metadata = await ReadingLinkMetadata.fetch(url)
+        let title = metadata?.title.isEmpty == false ? metadata?.title ?? "" : (url.host ?? url.absoluteString)
+        return await addReadingLink(title: String(title.prefix(200)), url: url, listID: listID, metadata: metadata)
+    }
+
     func addShoppingItems(_ entries: [ShoppingCaptureItem], listID: String, increaseDuplicates: Bool = false) async -> Int {
         let items = entries.map { item in
             var details = SpecializedTaskDetails()
@@ -2663,8 +2693,27 @@ final class TaskRepository {
         }
     }
 
+    /// Open bills' renewal, notice, and cancellation dates, for lists that keep deadline reminders on.
+    var billDeadlineAlerts: [NotificationScheduler.DeadlineAlert] {
+        tasks.compactMap { task -> [NotificationScheduler.DeadlineAlert]? in
+            let profile = listProfile(task.listID)
+            guard profile.type == .bills, profile.settings["Deadline Reminders"] != "false", !task.isCompleted else { return nil }
+            let fields = specializedDetails(task).fields
+            guard !["Paid", "Canceled"].contains(fields["Stage"] ?? "") else { return nil }
+            let lead = Int(profile.settings["Deadline Lead Days"] ?? "") ?? 3
+            return SpecializedListType.billDeadlineFields.compactMap { key in
+                guard profile.settings["Hidden Field " + key] != "true",
+                      let date = SpecializedTaskDetails.dateValue(fields[key] ?? "") else { return nil }
+                return NotificationScheduler.DeadlineAlert(taskID: task.id, listID: task.listID, taskTitle: task.title, label: key, date: date, leadDays: lead)
+            }
+        }.flatMap { $0 }
+    }
+
+    /// Re-applies reminders after list options that affect them change.
+    func refreshDeadlineReminders() async { await rescheduleNotifications() }
+
     private func rescheduleNotifications() async {
-        await notificationScheduler.rescheduleNotifications(for: tasks, enabled: notificationsEnabled)
+        await notificationScheduler.rescheduleNotifications(for: tasks, deadlines: billDeadlineAlerts, enabled: notificationsEnabled)
         await syncDueTodayActivity()
     }
 
@@ -2726,5 +2775,106 @@ final class TaskRepository {
                 return mult > 0 ? lhs.status.rawValue < rhs.status.rawValue : lhs.status.rawValue > rhs.status.rawValue
             }
         }
+    }
+}
+
+/// Title, creator, thumbnail, and reading time for a saved link, read from the page's HTML.
+struct ReadingLinkMetadata: Equatable, Sendable {
+    var title = ""
+    var creator = ""
+    var format = ""
+    var thumbnailURL: URL?
+    var estimatedMinutes: Int?
+
+    /// Fields for `SpecializedTaskDetails`, leaving out anything unknown.
+    var fields: [String: String] {
+        var result: [String: String] = [:]
+        if !creator.isEmpty { result["Creator"] = creator }
+        if !format.isEmpty { result["Format"] = format }
+        if let thumbnailURL { result["Thumbnail URL"] = thumbnailURL.absoluteString }
+        if let estimatedMinutes { result["Estimated Minutes"] = String(estimatedMinutes) }
+        return result
+    }
+
+    private static let maximumBytes = 1_000_000
+
+    static func fetch(_ url: URL) async -> ReadingLinkMetadata? {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else { return nil }
+        let prefix = data.prefix(maximumBytes)
+        guard let html = String(data: prefix, encoding: .utf8) ?? String(data: prefix, encoding: .isoLatin1) else { return nil }
+        return parse(html: html, baseURL: response.url ?? url, isComplete: data.count <= maximumBytes)
+    }
+
+    static func parse(html: String, baseURL: URL, isComplete: Bool = true) -> ReadingLinkMetadata {
+        var result = ReadingLinkMetadata()
+        result.title = meta(["og:title", "twitter:title"], in: html) ?? element("title", in: html) ?? ""
+        result.creator = meta(["author", "article:author", "book:author", "og:site_name", "twitter:creator"], in: html) ?? ""
+        if result.creator.lowercased().hasPrefix("http") { result.creator = "" }
+        if let image = meta(["og:image:secure_url", "og:image", "twitter:image"], in: html),
+           let imageURL = URL(string: image, relativeTo: baseURL)?.absoluteURL, imageURL.scheme?.lowercased() == "https" {
+            result.thumbnailURL = imageURL
+        }
+        let type = (meta(["og:type"], in: html) ?? "").lowercased()
+        let host = (baseURL.host ?? "").lowercased()
+        if type.contains("video") || ["youtube.com", "youtu.be", "vimeo.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
+            result.format = "Video"
+        } else if type.contains("book") {
+            result.format = "Book"
+        } else if type.contains("article") {
+            result.format = "Article"
+        }
+        if result.format != "Video", isComplete {
+            let words = wordCount(html)
+            if words >= 150 { result.estimatedMinutes = max(1, Int((Double(words) / 230).rounded())) }
+        }
+        return result
+    }
+
+    private static func meta(_ names: [String], in html: String) -> String? {
+        for name in names {
+            let escaped = NSRegularExpression.escapedPattern(for: name)
+            // The content value ends at its own opening quote, so apostrophes inside "…" survive.
+            let patterns = [
+                "<meta[^>]+(?:property|name)\\s*=\\s*[\"']\(escaped)[\"'][^>]*?content\\s*=\\s*([\"'])(.*?)\\1",
+                "<meta[^>]+?content\\s*=\\s*([\"'])(.*?)\\1[^>]*(?:property|name)\\s*=\\s*[\"']\(escaped)[\"']"
+            ]
+            for pattern in patterns {
+                if let value = firstCapture(pattern, group: 2, in: html), !value.isEmpty { return value }
+            }
+        }
+        return nil
+    }
+
+    private static func element(_ tag: String, in html: String) -> String? {
+        firstCapture("<\(tag)[^>]*>([^<]*)</\(tag)>", group: 1, in: html).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private static func firstCapture(_ pattern: String, group: Int, in html: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              match.numberOfRanges > group, let range = Range(match.range(at: group), in: html) else { return nil }
+        return decodeEntities(String(html[range])).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func decodeEntities(_ text: String) -> String {
+        var result = text
+        for (entity, value) in [("&quot;", "\""), ("&#39;", "'"), ("&#x27;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "), ("&#8217;", "’"), ("&#8211;", "–"), ("&#8212;", "—"), ("&amp;", "&")] {
+            result = result.replacingOccurrences(of: entity, with: value)
+        }
+        return result.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Words of visible body text; scripts, styles, and markup are removed first.
+    private static func wordCount(_ html: String) -> Int {
+        var text = html
+        for pattern in ["<script[\\s\\S]*?</script>", "<style[\\s\\S]*?</style>", "<noscript[\\s\\S]*?</noscript>", "<[^>]+>"] {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+        }
+        return text.split(whereSeparator: { $0.isWhitespace }).count
     }
 }

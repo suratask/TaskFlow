@@ -50,3 +50,15 @@ struct TaskFlowEventActivityAttributes: ActivityAttributes {
     var startDate: Date
     var endDate: Date
 }
+
+/// A routine step timer that keeps counting on the Lock Screen after TaskFlow leaves the foreground.
+struct TaskFlowRoutineTimerActivityAttributes: ActivityAttributes {
+    struct ContentState: Codable, Hashable {
+        var endDate: Date
+    }
+
+    var listID: String
+    var listTitle: String
+    var stepTitle: String
+    var startDate: Date
+}

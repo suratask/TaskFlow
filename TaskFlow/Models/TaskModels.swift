@@ -1428,6 +1428,8 @@ enum SpecializedListType: String, Codable, CaseIterable, Identifiable {
         case .routines: ["Section", "Step Order", "Instructions", "Timer Minutes", "Required"]
         }
     }
+    /// Bill dates that get automatic reminders.
+    static let billDeadlineFields = ["Renewal Date", "Notice Date", "Cancellation Deadline"]
     var stages: [String] {
         switch self {
         case .packing: ["Not Prepared", "Prepared", "Packed"]
@@ -1476,6 +1478,38 @@ struct SpecializedListTemplate: Codable, Hashable, Identifiable {
         var title: String
         var notes: String
         var details: SpecializedTaskDetails
+    }
+}
+
+/// Human-friendly presentation of the stored `yyyy-MM-dd` and amount fields.
+enum SpecializedFieldFormat {
+    /// Whole days from `now`'s day to `date`'s day; negative in the past.
+    static func dayOffset(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Int {
+        calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+    }
+
+    /// "Oct 5 · in 3 days", "Today", "Yesterday", or nil for an empty or invalid value.
+    static func date(_ text: String?, now: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard let text, let date = SpecializedTaskDetails.dateValue(text) else { return nil }
+        let offset = dayOffset(date, now: now, calendar: calendar)
+        switch offset {
+        case 0: return "Today"
+        case 1: return "Tomorrow"
+        case -1: return "Yesterday"
+        default:
+            let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+            let day = sameYear ? date.formatted(.dateTime.month(.abbreviated).day()) : date.formatted(.dateTime.month(.abbreviated).day().year())
+            guard abs(offset) <= 60 else { return day }
+            return day + " · " + (offset > 0 ? "in \(offset) days" : "\(-offset) days ago")
+        }
+    }
+
+    /// Amount formatted in its ISO currency when recognized, otherwise as a plain number.
+    static func amount(_ value: Double, currency: String?) -> String {
+        let code = (currency ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if code.count == 3, Locale.Currency.isoCurrencies.contains(where: { $0.identifier == code }) { return value.formatted(.currency(code: code)) }
+        let number = value.formatted(.number.precision(.fractionLength(2)))
+        return code.isEmpty ? number : number + " " + code
     }
 }
 

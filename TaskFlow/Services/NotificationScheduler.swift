@@ -19,9 +19,21 @@ final class NotificationScheduler {
         }
     }
 
+    /// A dated list field, such as a bill's cancellation deadline, that should alert on its day.
+    struct DeadlineAlert: Equatable {
+        var taskID: String
+        var listID: String
+        var taskTitle: String
+        var label: String
+        /// Stored `yyyy-MM-dd` day.
+        var date: Date
+        /// Also alert this many days before; 0 for only the day itself.
+        var leadDays: Int = 3
+    }
+
     private let center = UNUserNotificationCenter.current()
     private let identifierPrefix = "taskflow-due-"
-    private var pendingSchedule: ([TaskItem], Bool)?
+    private var pendingSchedule: ([TaskItem], [DeadlineAlert], Bool)?
     private var isScheduling = false
     private struct Input: Equatable {
         let id: String
@@ -38,6 +50,7 @@ final class NotificationScheduler {
         }
     }
     private var lastInputs: [Input]?
+    private var lastDeadlines: [DeadlineAlert]?
     private var lastLimit: Int?
     private var lastTimeZone: TimeZone?
     private var cachedRequests: [UNNotificationRequest] = []
@@ -72,18 +85,18 @@ final class NotificationScheduler {
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
-    func rescheduleNotifications(for tasks: [TaskItem], enabled: Bool) async {
-        pendingSchedule = (tasks, enabled)
+    func rescheduleNotifications(for tasks: [TaskItem], deadlines: [DeadlineAlert] = [], enabled: Bool) async {
+        pendingSchedule = (tasks, deadlines, enabled)
         guard !isScheduling else { return }
         isScheduling = true
         defer { isScheduling = false }
-        while let (latestTasks, latestEnabled) = pendingSchedule {
+        while let (latestTasks, latestDeadlines, latestEnabled) = pendingSchedule {
             pendingSchedule = nil
-            await applySchedule(for: latestTasks, enabled: latestEnabled)
+            await applySchedule(for: latestTasks, deadlines: latestDeadlines, enabled: latestEnabled)
         }
     }
 
-    private func applySchedule(for tasks: [TaskItem], enabled: Bool) async {
+    private func applySchedule(for tasks: [TaskItem], deadlines: [DeadlineAlert], enabled: Bool) async {
         lastSchedulingError = nil
         let existing = await center.pendingNotificationRequests()
         let owned = existing.filter { $0.identifier.hasPrefix(identifierPrefix) }
@@ -97,9 +110,9 @@ final class NotificationScheduler {
         let now = Date()
         let inputs = tasks.filter { !$0.isCompleted }.map(Input.init)
         let zone = TimeZone.current
-        if lastInputs != inputs || lastLimit != available || lastTimeZone != zone || now >= requestsValidUntil {
-            cachedRequests = Self.requests(for: tasks, now: now, limit: available)
-            lastInputs = inputs; lastLimit = available; lastTimeZone = zone
+        if lastInputs != inputs || lastDeadlines != deadlines || lastLimit != available || lastTimeZone != zone || now >= requestsValidUntil {
+            cachedRequests = Self.requests(for: tasks, deadlines: deadlines, now: now, limit: available)
+            lastInputs = inputs; lastDeadlines = deadlines; lastLimit = available; lastTimeZone = zone
             requestsValidUntil = cachedRequests.compactMap { ($0.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() }.min() ?? now.addingTimeInterval(60)
             requestsValidUntil = min(requestsValidUntil, now.addingTimeInterval(60))
         }
@@ -119,7 +132,7 @@ final class NotificationScheduler {
     private(set) var lastSchedulingError: String?
 
     /// Stable IDs and absolute triggers let edits replace alerts without deleting unrelated requests.
-    static func requests(for tasks: [TaskItem], now: Date, limit: Int = 64, calendar: Calendar = .current) -> [UNNotificationRequest] {
+    static func requests(for tasks: [TaskItem], deadlines: [DeadlineAlert] = [], now: Date, limit: Int = 64, calendar: Calendar = .current) -> [UNNotificationRequest] {
         var candidates: [(Date, UNNotificationRequest)] = []
         var seen = Set<String>()
         for task in tasks where !task.isCompleted {
@@ -154,6 +167,27 @@ final class NotificationScheduler {
                 let request = UNNotificationRequest(identifier: identifier, content: content,
                     trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
                 candidates.append((date, request))
+            }
+        }
+        for deadline in deadlines {
+            guard deadline.date.timeIntervalSince1970.isFinite,
+                  let day = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: deadline.date) else { continue }
+            let slug = deadline.label.lowercased().replacingOccurrences(of: " ", with: "-")
+            for lead in Set([0, max(0, min(deadline.leadDays, 30))]).sorted() {
+                guard let date = calendar.date(byAdding: .day, value: -lead, to: day), date > now,
+                      let timestamp = Int(exactly: date.timeIntervalSince1970.rounded(.towardZero)) else { continue }
+                let identifier = "taskflow-due-" + deadline.taskID + "-" + slug + "-" + String(timestamp)
+                guard seen.insert(identifier).inserted else { continue }
+                let content = UNMutableNotificationContent()
+                content.title = deadline.label + (lead == 0 ? " Today" : " in \(lead) Days")
+                content.body = deadline.taskTitle + " · " + deadline.date.formatted(date: .abbreviated, time: .omitted)
+                content.sound = .default
+                content.threadIdentifier = deadline.listID
+                content.userInfo = [TaskFlowNotificationPayload.taskIDKey: deadline.taskID, TaskFlowNotificationPayload.listIDKey: deadline.listID]
+                var components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+                components.timeZone = calendar.timeZone
+                candidates.append((date, UNNotificationRequest(identifier: identifier, content: content,
+                    trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))))
             }
         }
         return candidates.sorted {

@@ -18,7 +18,7 @@ In an existing task's details, open the specialized details row to edit optional
 
 Widgets keep their flat actionable layout, showing shopping quantities, store names, and available progress stages from shared metadata. Widget timeline refresh remains system controlled.
 
-Limitations: timers are foreground UI countdowns; no background timer alarm is claimed. Opening hours and travel dates are user-provided, not fetched. Native reminder sharing does not automatically share TaskFlow-specific fields with another person's account. Custom fields are not written into Apple Reminders' private grocery or assignment APIs. Physical-device verification is still needed for EventKit-backed creation, completion, undo, drag-and-drop, and widget interaction.
+Limitations: Opening hours and travel dates are user-provided, not fetched. Native reminder sharing does not automatically share TaskFlow-specific fields with another person's account. Custom fields are not written into Apple Reminders' private grocery or assignment APIs. Physical-device verification is still needed for EventKit-backed creation, completion, undo, drag-and-drop, and widget interaction.
 
 
 ## Specialized list polish phases (October 4, 2026)
@@ -29,7 +29,7 @@ Limitations: timers are foreground UI countdowns; no background timer alarm is c
 4. **Bills, reading and errands:** bills separate payment due dates from optional renewal, notice and cancellation dates, with reviewable reminder creation and confirmation notes. Reading supports ratings, progress detail, estimated time, source links and optional HTTPS thumbnail URLs. Errands show destinations, opening hours, linked shopping lists, Maps actions and a saved preparation checklist.
 5. **Appointments and routines:** appointment details group preparation, questions and outcomes into Before/During/After; saved preparation checkmarks reset when the checklist text changes. Routines show the next open step, required markers, ordered templates, existing foreground timers and checklist run history.
 
-Fields remain app-managed metadata. Thumbnail images use user-entered URLs; no automatic article scraping is performed. Notice/cancellation reminders require review and save. Timers remain foreground timers. Cross-account task assignment and non-shopping TaskFlow metadata remain outside the private metadata model. Shopping item details now travel with their reminders as described below. Physical-device visual validation is still required.
+Fields remain app-managed metadata. (Superseded October 5, 2026: see below for page details, automatic deadline reminders, and background timers.) Cross-account task assignment and non-shopping TaskFlow metadata remain outside the private metadata model. Shopping item details now travel with their reminders as described below. Physical-device visual validation is still required.
 
 
 ## Shopping quantities, repeat purchases, and shared activity
@@ -66,3 +66,15 @@ Tap a row’s price or Add Price to open a compact currency-formatted price edit
 
 
 Price-entry mode: use Estimate Missing Prices in the shopping header or List Tools. It captures a stable queue of the visible open unpriced items, shows item/store/unit and progress, and offers Save & Next with the decimal keyboard retained. The keyboard accessory provides Next; Skip leaves an item unchanged, and successful saves remain committed if the mode is closed early. Deleted/completed queued items are skipped. Invalid or negative values cannot be saved, and errors keep the current entry available for retry. Suggestions in Buy Again and Common Items show price per unit when an estimate exists. The selected store’s remembered price takes precedence, and the displayed suggestion estimate is also used when adding it. Regression tests cover localized decimal entry and matching-store suggestion pricing; physical-device keyboard and navigation checks remain.
+
+
+## List type upgrades (October 5, 2026)
+
+- **Readable dates and amounts:** stored `yyyy-MM-dd` fields display as "Today", "Tomorrow", or "Oct 20 · in 15 days". Past bill deadlines on open bills show in red; household "Last done" turns orange once older than its repeat interval; appointments show their follow-up date. Bill amounts and totals use the currency's own format when the Currency field is an ISO code.
+- **Bill deadline reminders:** open bills alert at 9 AM on their Renewal, Notice, and Cancellation dates, plus an advance notice (default 3 days). Customize Fields → Reminders turns this off per list or changes the advance notice. Paid/Canceled bills and hidden fields stay quiet. These requests share the app's 64-notification budget and are ordered by date with task alerts.
+- **Routine timers:** Start Timer (row menu, or beside the current step) keeps running after leaving the list or the app. The end time is stored per list, a local notification fires when it ends, and a Lock Screen/Dynamic Island Live Activity counts down. Stop Timer cancels all three; finished activities are cleaned up on next launch or foreground.
+- **Errand places:** an errand's details include Place search. The chosen place is saved on the reminder as a location alert (arrive or leave, adjustable radius), so Reminders delivers the alert. Rows show the place, and Open in Maps / Get Directions use exact coordinates.
+- **Reading link details:** Save a Link fetches the page and fills the title (unless typed), creator, format, HTTPS thumbnail, and an estimated reading time (230 words per minute, articles only). Share Sheet → TaskFlow → Read Later (pre-selected for shared web pages) saves into the selected Reading list, else the default list's Reading list, else the first one. Without a Reading list the link opens in Quick Capture instead. Pages that block the request, or http pages blocked by App Transport Security, simply save without details.
+- **Next Actions:** Projects lists show a "Next Actions in All Projects" row (also in List Tools). It gathers open Next Action tasks from every Projects list, soonest due first, with section, milestone, and blocked reason. Tap to open, tap the circle to complete, swipe to clear. Row menus now offer Clear Next Action.
+
+Validation: regression tests cover date/amount formatting, page metadata parsing (Open Graph, attribute order, entities, reading time, video hosts), and deadline notification timing/identifiers. Physical-device checks remain necessary for Live Activities, location alerts, the share extension, and network page fetches.

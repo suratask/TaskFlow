@@ -2195,6 +2195,56 @@ struct TaskFlowEventLiveActivity: Widget {
     }
 }
 
+struct TaskFlowRoutineTimerLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: TaskFlowRoutineTimerActivityAttributes.self) { context in
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "timer").font(.title2.weight(.semibold)).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(context.attributes.stepTitle.isEmpty ? context.attributes.listTitle : context.attributes.stepTitle).font(.headline).lineLimit(1)
+                    Text(context.attributes.listTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                routineCountdown(context.attributes, end: context.state.endDate).font(.title2.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .widgetURL(TaskFlowDeepLink.listURL(context.attributes.listID))
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Image(systemName: "timer").foregroundStyle(.orange)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    routineCountdown(context.attributes, end: context.state.endDate).font(.title3.weight(.semibold))
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(context.attributes.stepTitle.isEmpty ? context.attributes.listTitle : context.attributes.stepTitle).font(.headline).lineLimit(1)
+                        Text(context.attributes.listTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            } compactLeading: {
+                Image(systemName: "timer").foregroundStyle(.orange)
+            } compactTrailing: {
+                routineCountdown(context.attributes, end: context.state.endDate).frame(maxWidth: 56)
+            } minimal: {
+                Image(systemName: "timer").foregroundStyle(.orange)
+            }
+            .widgetURL(TaskFlowDeepLink.listURL(context.attributes.listID))
+        }
+    }
+
+    @ViewBuilder
+    private func routineCountdown(_ attributes: TaskFlowRoutineTimerActivityAttributes, end: Date) -> some View {
+        if Date.now < end, attributes.startDate < end {
+            Text(timerInterval: attributes.startDate...end, countsDown: true).monospacedDigit().multilineTextAlignment(.trailing)
+        } else {
+            Text("Done").foregroundStyle(.secondary)
+        }
+    }
+}
+
 struct TaskFlowDueTodayLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TaskFlowDueTodayActivityAttributes.self) { context in
@@ -2337,6 +2387,7 @@ struct TaskFlowWidgetBundle: WidgetBundle {
         TaskFlowPinnedNoteWidget()
         TaskFlowDueTodayLiveActivity()
         TaskFlowEventLiveActivity()
+        TaskFlowRoutineTimerLiveActivity()
         if #available(iOS 18.0, *) {
             QuickCaptureControl()
             NewNoteControl()

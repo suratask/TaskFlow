@@ -1,5 +1,6 @@
 import ActivityKit
 import Foundation
+import UserNotifications
 
 @MainActor
 final class DueTodayLiveActivityCoordinator {
@@ -161,6 +162,67 @@ final class EventLiveActivityCoordinator {
                   event.location == attributes.location else {
                 await activity.end(nil, dismissalPolicy: .immediate)
                 continue
+            }
+        }
+    }
+}
+
+/// Routine step timers outlive the list screen: the end time is stored per list,
+/// a local notification fires when it ends, and a Live Activity counts down.
+@MainActor
+enum RoutineTimerCoordinator {
+    private static let defaults = UserDefaults.standard
+    private static func key(_ listID: String) -> String { "TaskFlow.routineTimer." + listID }
+    private static func notificationID(_ listID: String) -> String { "taskflow-routine-timer-" + listID }
+
+    /// The running timer's end and step title, or nil once it has ended.
+    static func current(listID: String) -> (end: Date, step: String)? {
+        guard let stored = defaults.dictionary(forKey: key(listID)),
+              let interval = stored["end"] as? Double, interval.isFinite else { return nil }
+        let end = Date(timeIntervalSince1970: interval)
+        guard end > Date() else {
+            defaults.removeObject(forKey: key(listID))
+            return nil
+        }
+        return (end, stored["step"] as? String ?? "")
+    }
+
+    @discardableResult
+    static func start(listID: String, listTitle: String, step: String, minutes: Int) async -> Date {
+        await stop(listID: listID)
+        let start = Date()
+        let end = start.addingTimeInterval(Double(min(1440, max(1, minutes))) * 60)
+        defaults.set(["end": end.timeIntervalSince1970, "step": step], forKey: key(listID))
+
+        let content = UNMutableNotificationContent()
+        content.title = "Timer Finished"
+        content.body = step.isEmpty ? listTitle : step + " · " + listTitle
+        content.sound = .default
+        content.threadIdentifier = listID
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, end.timeIntervalSince(start)), repeats: false)
+        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: notificationID(listID), content: content, trigger: trigger))
+
+        if ActivityAuthorizationInfo().areActivitiesEnabled {
+            let attributes = TaskFlowRoutineTimerActivityAttributes(listID: listID, listTitle: String(listTitle.prefix(80)), stepTitle: String(step.prefix(160)), startDate: start)
+            _ = try? Activity.request(attributes: attributes, content: ActivityContent(state: TaskFlowRoutineTimerActivityAttributes.ContentState(endDate: end), staleDate: end), pushType: nil)
+        }
+        return end
+    }
+
+    static func stop(listID: String) async {
+        defaults.removeObject(forKey: key(listID))
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [notificationID(listID)])
+        for activity in Activity<TaskFlowRoutineTimerActivityAttributes>.activities where activity.attributes.listID == listID {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+    }
+
+    /// Ends Live Activities whose timers finished while TaskFlow was suspended.
+    static func reconcile() async {
+        for activity in Activity<TaskFlowRoutineTimerActivityAttributes>.activities {
+            let end = activity.content.state.endDate
+            if end <= Date() || current(listID: activity.attributes.listID) == nil {
+                await activity.end(ActivityContent(state: activity.content.state, staleDate: nil), dismissalPolicy: .default)
             }
         }
     }

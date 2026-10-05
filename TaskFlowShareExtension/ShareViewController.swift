@@ -3,7 +3,8 @@ import UniformTypeIdentifiers
 
 final class ShareViewController: UIViewController {
     private var sharedText = ""
-    private let kindControl = UISegmentedControl(items: ["Task", "Event", "Note"])
+    private let kindControl = UISegmentedControl(items: ["Task", "Event", "Note", "Read Later"])
+    private static let readLaterIndex = 3
     private let preview = UILabel()
     private let save = UIButton(type: .system)
 
@@ -53,9 +54,12 @@ final class ShareViewController: UIViewController {
         provider.loadItem(forTypeIdentifier: type, options: nil) { [weak self] item, _ in
             let text = (item as? String) ?? (item as? URL)?.absoluteString ?? ""
             DispatchQueue.main.async {
-                self?.sharedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                self?.preview.text = self?.sharedText.isEmpty == false ? self?.sharedText : "No text found."
-                self?.save.isEnabled = self?.sharedText.isEmpty == false
+                guard let self else { return }
+                self.sharedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.preview.text = self.sharedText.isEmpty ? "No text found." : self.sharedText
+                self.save.isEnabled = !self.sharedText.isEmpty
+                // A shared web page most likely belongs in a Reading list.
+                if Self.webURL(in: self.sharedText) != nil, type == UTType.url.identifier { self.kindControl.selectedSegmentIndex = Self.readLaterIndex }
             }
         }
     }
@@ -66,7 +70,11 @@ final class ShareViewController: UIViewController {
             extensionContext?.cancelRequest(withError: NSError(domain: "TaskFlowShare", code: 1))
             return
         }
-        if kindControl.selectedSegmentIndex == 2 {
+        if kindControl.selectedSegmentIndex == Self.readLaterIndex, let url = Self.webURL(in: sharedText) {
+            var links = defaults.stringArray(forKey: "TaskFlow.pendingReadingLinks") ?? []
+            links.append(url.absoluteString)
+            defaults.set(links, forKey: "TaskFlow.pendingReadingLinks")
+        } else if kindControl.selectedSegmentIndex == 2 {
             var notes = defaults.array(forKey: "TaskFlow.pendingSharedNotes") as? [String] ?? []
             notes.append(sharedText)
             defaults.set(notes, forKey: "TaskFlow.pendingSharedNotes")
@@ -75,6 +83,14 @@ final class ShareViewController: UIViewController {
         }
         defaults.synchronize()
         extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+    }
+
+    /// The first http(s) link in shared text, which may be a bare URL or text containing one.
+    private static func webURL(in text: String) -> URL? {
+        if let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil { return url }
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+        return detector.matches(in: text, range: NSRange(text.startIndex..., in: text))
+            .compactMap(\.url).first { ["http", "https"].contains($0.scheme?.lowercased() ?? "") }
     }
 
     @objc private func cancelShare() {

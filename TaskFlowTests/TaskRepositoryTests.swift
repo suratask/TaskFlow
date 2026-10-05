@@ -1,6 +1,7 @@
 import XCTest
 import EventKit
 import CoreLocation
+import UserNotifications
 @testable import TaskFlow
 
 @MainActor
@@ -1421,6 +1422,64 @@ final class TaskRepositoryTests: XCTestCase {
         ]
         let messages = CalendarPlanningEngine.conflicts(events: events, tasks: [], settings: CalendarWorkspaceSettings(), calendar: calendar)
         XCTAssertTrue(messages.isEmpty)
+    }
+
+    func testSpecializedFieldFormatReadsDatesAndAmounts() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 5, hour: 12))!
+        XCTAssertEqual(SpecializedFieldFormat.date("2026-10-05", now: now, calendar: calendar), "Today")
+        XCTAssertEqual(SpecializedFieldFormat.date("2026-10-06", now: now, calendar: calendar), "Tomorrow")
+        XCTAssertEqual(SpecializedFieldFormat.date("2026-10-04", now: now, calendar: calendar), "Yesterday")
+        XCTAssertTrue(SpecializedFieldFormat.date("2026-10-08", now: now, calendar: calendar)?.hasSuffix("in 3 days") == true)
+        XCTAssertTrue(SpecializedFieldFormat.date("2026-09-25", now: now, calendar: calendar)?.hasSuffix("10 days ago") == true)
+        XCTAssertNil(SpecializedFieldFormat.date("not a date", now: now, calendar: calendar))
+        XCTAssertNil(SpecializedFieldFormat.date(nil, now: now, calendar: calendar))
+        XCTAssertEqual(SpecializedFieldFormat.amount(12.5, currency: "usd"), 12.5.formatted(.currency(code: "USD")))
+        XCTAssertEqual(SpecializedFieldFormat.amount(12.5, currency: "points"), "12.50 POINTS")
+        XCTAssertEqual(SpecializedFieldFormat.amount(3, currency: nil), "3.00")
+    }
+
+    func testReadingLinkMetadataParsesOpenGraphAndReadingTime() {
+        let words = Array(repeating: "word", count: 460).joined(separator: " ")
+        let html = """
+        <html><head><title>Fallback &amp; Title</title>
+        <meta property="og:title" content="Don't Panic: A Guide">
+        <meta content='Jane Doe' name='author'>
+        <meta property="og:image" content="/img/cover.jpg">
+        <meta property="og:type" content="article"></head>
+        <body><script>var ignored = "\(words)";</script><p>\(words)</p></body></html>
+        """
+        let metadata = ReadingLinkMetadata.parse(html: html, baseURL: URL(string: "https://example.com/post")!)
+        XCTAssertEqual(metadata.title, "Don't Panic: A Guide")
+        XCTAssertEqual(metadata.creator, "Jane Doe")
+        XCTAssertEqual(metadata.thumbnailURL?.absoluteString, "https://example.com/img/cover.jpg")
+        XCTAssertEqual(metadata.format, "Article")
+        XCTAssertEqual(metadata.estimatedMinutes, 2)
+
+        let plain = ReadingLinkMetadata.parse(html: "<title> A &amp; B </title>", baseURL: URL(string: "https://youtube.com/watch?v=1")!)
+        XCTAssertEqual(plain.title, "A & B")
+        XCTAssertEqual(plain.format, "Video")
+        XCTAssertNil(plain.estimatedMinutes)
+        XCTAssertNil(plain.thumbnailURL)
+    }
+
+    func testBillDeadlinesScheduleOnTheDayAndWithAdvanceNotice() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 5, hour: 12))!
+        let deadline = calendar.date(from: DateComponents(year: 2026, month: 10, day: 20))!
+        let alert = NotificationScheduler.DeadlineAlert(taskID: "bill", listID: "bills", taskTitle: "Streaming", label: "Cancellation Deadline", date: deadline, leadDays: 3)
+        let requests = NotificationScheduler.requests(for: [], deadlines: [alert], now: now, calendar: calendar)
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertTrue(requests.allSatisfy { $0.identifier.hasPrefix("taskflow-due-bill-cancellation-deadline-") })
+        XCTAssertEqual(requests.map(\.content.title), ["Cancellation Deadline in 3 Days", "Cancellation Deadline Today"])
+        let fireDates = requests.compactMap { ($0.trigger as? UNCalendarNotificationTrigger)?.dateComponents }.map { $0.day }
+        XCTAssertEqual(fireDates, [17, 20])
+
+        // Past days stay quiet; a deadline already reached produces nothing.
+        let past = NotificationScheduler.DeadlineAlert(taskID: "old", listID: "bills", taskTitle: "Gym", label: "Notice Date", date: calendar.date(byAdding: .day, value: -1, to: now)!)
+        XCTAssertTrue(NotificationScheduler.requests(for: [], deadlines: [past], now: now, calendar: calendar).isEmpty)
     }
 
     func testCalendarPreferencesClampOutOfRangeSyncedValues() throws {

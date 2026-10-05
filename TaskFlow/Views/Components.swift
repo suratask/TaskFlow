@@ -663,6 +663,12 @@ struct SpecializedTaskEditor: View {
     @State private var details = SpecializedTaskDetails()
     @State private var saving = false
     @State private var initialized = false
+    @State private var location: TaskLocation?
+    @State private var originalLocation: TaskLocation?
+    @State private var locationQuery = ""
+    @State private var locationResults: [LocationLookupResult] = []
+    @State private var searchingLocation = false
+    @State private var locationError = ""
     private func field(_ key: String) -> Binding<String> {
         Binding(get: { details.fields[key] ?? "" }, set: { details.fields[key] = $0 })
     }
@@ -718,6 +724,7 @@ struct SpecializedTaskEditor: View {
                     }
                 }
             } header: { Text(type.rawValue) } footer: { Text("These optional details are saved in TaskFlow. Changing list type keeps them.") }
+            if type == .errands { errandLocationSection }
             if type == .appointments {
                 if repository.listProfile(task.listID).settings["Hidden Field Preparation"] != "true" { Section("Before · Preparation") { TextField("One preparation step per line", text: field("Preparation"), axis: .vertical).lineLimit(2...6) } }
                 if repository.listProfile(task.listID).settings["Hidden Field Questions"] != "true" { Section("During · Questions") { TextField("Questions to ask", text: field("Questions"), axis: .vertical).lineLimit(2...6) } }
@@ -729,11 +736,85 @@ struct SpecializedTaskEditor: View {
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") {
             saving = true
             Task {
-                if await repository.saveSpecializedDetails(details, for: task, type: type) { dismiss() }
+                var saved = details
+                if type == .errands, let location, (saved.fields["Destination"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    saved.fields["Destination"] = location.displayTitle
+                }
+                var succeeded = await repository.saveSpecializedDetails(saved, for: task, type: type)
+                if succeeded, type == .errands, location != originalLocation {
+                    // The place is saved on the reminder, where Reminders delivers its arrival alert.
+                    var draft = TaskDraft(task: repository.tasks.first { $0.id == task.id } ?? task)
+                    draft.location = location
+                    succeeded = await repository.saveTask(draft)
+                }
+                if succeeded { dismiss() }
                 saving = false
             }
-        }.disabled(saving) } }
-        .onAppear { guard !initialized else { return }; initialized = true; details = repository.specializedDetails(task) }
+        }.disabled(saving || searchingLocation) } }
+        .onAppear {
+            guard !initialized else { return }
+            initialized = true
+            details = repository.specializedDetails(task)
+            location = (repository.tasks.first { $0.id == task.id } ?? task).location
+            originalLocation = location
+        }
+    }
+
+    @ViewBuilder private var errandLocationSection: some View {
+        Section {
+            if let current = location {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(current.displayTitle)
+                        if current.displayAddress != current.displayTitle { Text(current.displayAddress).font(.caption).foregroundStyle(.secondary) }
+                    }
+                } icon: { Image(systemName: "mappin.circle.fill").foregroundStyle(.tint) }
+                if current.latitude != nil, current.longitude != nil {
+                    Picker("Remind Me", selection: Binding(get: { location?.proximity ?? .onArrival }, set: { location?.proximity = $0 })) {
+                        ForEach(LocationProximity.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    Stepper("Radius: \(Int(current.radius)) m", value: Binding(get: { location?.radius ?? 100 }, set: { location?.radius = $0 }), in: 50...1000, step: 50)
+                }
+                Button("Remove Place", role: .destructive) { location = nil }
+            }
+            HStack {
+                TextField(location == nil ? "Search for a store or address" : "Change place", text: $locationQuery)
+                    .onSubmit { searchLocation() }
+                    .submitLabel(.search)
+                if searchingLocation { ProgressView() }
+            }
+            ForEach(locationResults) { result in
+                Button {
+                    var chosen = result.location
+                    chosen.radius = location?.radius ?? 100
+                    chosen.proximity = location?.proximity ?? .onArrival
+                    location = chosen
+                    locationResults = []
+                    locationQuery = ""
+                } label: { LocationLookupRow(result: result) }
+                    .tint(.primary)
+            }
+        } header: { Text("Place") } footer: {
+            if !locationError.isEmpty { Text(locationError) }
+            else { Text("Choose a place to get a Reminders alert when you arrive, and to open it in Maps.") }
+        }
+    }
+
+    private func searchLocation() {
+        let query = locationQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !searchingLocation, !query.isEmpty else { return }
+        searchingLocation = true
+        locationError = ""
+        Task {
+            defer { searchingLocation = false }
+            do {
+                let request = MKLocalSearch.Request()
+                request.naturalLanguageQuery = query
+                let response = try await MKLocalSearch(request: request).start()
+                locationResults = response.mapItems.prefix(5).map(LocationLookupResult.init(mapItem:))
+                if locationResults.isEmpty { locationError = "No places found. Try a more specific name or address." }
+            } catch { locationError = error.localizedDescription }
+        }
     }
 }
 
@@ -752,6 +833,8 @@ struct SpecializedTaskListView: View {
     @State private var showsTemplates = false
     @State private var showingShoppingCategories = false
     @State private var timerEnd: Date?
+    @State private var timerStep = ""
+    @State private var showingNextActions = false
     @State private var linkedEvent: CalendarEvent?
     @State private var editingItem: TaskItem?
     @State private var showingSettings = false
@@ -873,7 +956,10 @@ struct SpecializedTaskListView: View {
                     VStack(alignment: .leading) {
                         Text("Current Step").font(.caption).foregroundStyle(.secondary)
                         Text(current.title).font(.headline)
-                        Button("Complete & Next", systemImage: "checkmark.circle") { Task { await repository.toggleCompletion(for: current) } }
+                        HStack {
+                            Button("Complete & Next", systemImage: "checkmark.circle") { Task { await repository.toggleCompletion(for: current) } }
+                            if timerEnd == nil { Button("Start Timer", systemImage: "timer") { startTimer(for: current) } }
+                        }.buttonStyle(.borderless)
                     }
                 }
                 if type == .packing {
@@ -896,19 +982,36 @@ struct SpecializedTaskListView: View {
                     Toggle("Group by Store", isOn: $groupByStore)
                     Button("Paste Several Items", systemImage: "text.badge.plus") { showingBulkCapture = true }
                 }
+                if type == .projects {
+                    let nextCount = repository.projectNextActions.count
+                    Button { showingNextActions = true } label: {
+                        LabeledContent { Text("\(nextCount)") } label: { Label("Next Actions in All Projects", systemImage: "arrow.right.circle") }
+                    }
+                }
                 if type == .reading { Button("Save a Link", systemImage: "link.badge.plus") { showingReadingCapture = true } }
                 if type == .bills {
                     ForEach(billTotals.keys.sorted(), id: \.self) { currency in
-                        LabeledContent("Open total (" + currency + ")", value: billTotals[currency, default: 0].formatted(.number.precision(.fractionLength(2))))
+                        LabeledContent("Open total" + (currency == "Unspecified" ? " (no currency)" : ""), value: SpecializedFieldFormat.amount(billTotals[currency, default: 0], currency: currency == "Unspecified" ? nil : currency))
                     }
                     ForEach(monthlyBillTotals.keys.sorted(), id: \.self) { currency in
-                        LabeledContent("Due this month (" + currency + ")", value: monthlyBillTotals[currency, default: 0].formatted(.number.precision(.fractionLength(2))))
+                        LabeledContent("Due this month" + (currency == "Unspecified" ? " (no currency)" : ""), value: SpecializedFieldFormat.amount(monthlyBillTotals[currency, default: 0], currency: currency == "Unspecified" ? nil : currency))
                     }
                     Text("Totals include open bills with a valid amount. Due dates and recurrence are set in task details.").font(.caption).foregroundStyle(.secondary)
                 }
                 if type == .routines, let timerEnd {
-                    HStack { Text("Timer"); Spacer(); Text(timerInterval: Date()...max(Date(), timerEnd), countsDown: true) }
-                    Button("Stop Timer") { self.timerEnd = nil }
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Timer")
+                            if !timerStep.isEmpty { Text(timerStep).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        Text(timerInterval: Date()...max(Date(), timerEnd), countsDown: true).monospacedDigit()
+                    }
+                    Button("Stop Timer", role: .destructive) {
+                        self.timerEnd = nil
+                        Task { await RoutineTimerCoordinator.stop(listID: listID) }
+                    }
+                    Text("Keeps running on the Lock Screen and alerts you when it ends.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if visible.isEmpty {
@@ -951,7 +1054,15 @@ struct SpecializedTaskListView: View {
         }
         }
         }
+        .task(id: timerEnd) {
+            // Clear the finished countdown; the notification and Live Activity report completion.
+            guard let timerEnd else { return }
+            try? await Task.sleep(for: .seconds(max(0, timerEnd.timeIntervalSinceNow)))
+            if !Task.isCancelled { loadTimer() }
+        }
+        .onChange(of: listID) { loadTimer() }
         .onAppear {
+            loadTimer()
             let settings = repository.listProfile(listID).settings
             shoppingMode = settings["Shopping Mode"] == "true"
             groupByStore = settings["Group Store"] == "true"
@@ -988,7 +1099,10 @@ struct SpecializedTaskListView: View {
                     Button("Customize Fields", systemImage: "slider.horizontal.3") { showingSettings = true }
                     if let action = repository.taskUndo { Button("Undo " + action.message, systemImage: "arrow.uturn.backward") { Task { await repository.undoLastTaskAction() } } }
                     if repository.listProfile(listID).settings["Current Run"] != nil { Toggle("Show Previous Runs", isOn: $showPreviousRuns) }
-                    if type == .projects { Button("Add Section", systemImage: "rectangle.split.3x1") { addingSection = true } }
+                    if type == .projects {
+                        Button("Add Section", systemImage: "rectangle.split.3x1") { addingSection = true }
+                        Button("Next Actions in All Projects", systemImage: "arrow.right.circle") { showingNextActions = true }
+                    }
                     Button("Templates", systemImage: "doc.on.doc") { showsTemplates = true }
                     if type == .shopping {
                         Button("Estimate Missing Prices", systemImage: "dollarsign.circle") { priceEntryIDs = unpricedShoppingItems.map(\.id); showingPriceEntry = true }
@@ -1050,6 +1164,35 @@ struct SpecializedTaskListView: View {
             CalendarEventDetailView(repository: repository, event: event, color: repository.eventCalendars.first { $0.id == event.calendarID }?.color ?? .blue)
         }
         .sheet(isPresented: $showsTemplates) { SpecializedTemplateManager(repository: repository, listID: listID) }
+        .sheet(isPresented: $showingNextActions) { ProjectNextActionsView(repository: repository) }
+    }
+    /// Apple Maps link for an errand: exact coordinates when a place was chosen, otherwise a text search.
+    static func mapsURL(place: TaskLocation?, destination: String, directions: Bool) -> URL? {
+        var components = URLComponents(string: "https://maps.apple.com/")
+        if let place, let latitude = place.latitude, let longitude = place.longitude, latitude.isFinite, longitude.isFinite {
+            let coordinate = "\(latitude),\(longitude)"
+            components?.queryItems = directions
+                ? [URLQueryItem(name: "daddr", value: coordinate)]
+                : [URLQueryItem(name: "ll", value: coordinate), URLQueryItem(name: "q", value: place.displayTitle.isEmpty ? destination : place.displayTitle)]
+        } else {
+            let query = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else { return nil }
+            components?.queryItems = [URLQueryItem(name: directions ? "daddr" : "q", value: query)]
+        }
+        return components?.url
+    }
+    private func startTimer(for task: TaskItem) {
+        let minutes = Int(repository.specializedDetails(task).fields["Timer Minutes"] ?? "") ?? task.durationMinutes ?? 5
+        let listTitle = repository.lists.first { $0.id == listID }?.title ?? "Routine"
+        Task {
+            timerEnd = await RoutineTimerCoordinator.start(listID: listID, listTitle: listTitle, step: task.title, minutes: minutes)
+            timerStep = task.title
+        }
+    }
+    private func loadTimer() {
+        let current = RoutineTimerCoordinator.current(listID: listID)
+        timerEnd = current?.end
+        timerStep = current?.step ?? ""
     }
     private var billTotals: [String: Double] { totals(for: items) }
     private var monthlyBillTotals: [String: Double] { totals(for: items.filter { task in guard let due = task.dueDate else { return false }; return Calendar.current.isDate(due, equalTo: Date(), toGranularity: .month) }) }
@@ -1105,7 +1248,13 @@ struct SpecializedTaskListView: View {
             VStack(alignment: .leading, spacing: 4) {
             Button { repository.selectedTaskID = task.id } label: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if type == .errands, let destination = repository.specializedDetails(task).fields["Destination"], !destination.isEmpty { Text(destination).font(.caption).foregroundStyle(.secondary) }
+                    if type == .errands {
+                        let destination = repository.specializedDetails(task).fields["Destination"] ?? ""
+                        if let place = task.location, place.latitude != nil {
+                            Label(destination.isEmpty ? place.displayTitle : destination, systemImage: place.proximity == .onDeparture ? "location.north.circle" : "mappin.circle")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if !destination.isEmpty { Text(destination).font(.caption).foregroundStyle(.secondary) }
+                    }
                     let details = repository.specializedDetails(task)
                     HStack(alignment: .firstTextBaseline) {
                         Text(task.title).foregroundStyle(.primary).font(shoppingMode ? .title3 : .body).strikethrough(task.isCompleted)
@@ -1120,6 +1269,10 @@ struct SpecializedTaskListView: View {
                                 Text("Purchased by " + actor).font(.caption2).foregroundStyle(.secondary)
                             } else { Text("Purchased in Reminders").font(.caption2).foregroundStyle(.secondary) }
                         } else if let actor = details.fields["Added By"] { Text("Added by " + actor).font(.caption2).foregroundStyle(.secondary) }
+                    } else if type == .bills {
+                        let amount = Double(details.fields["Amount"] ?? "").flatMap { $0.isFinite ? SpecializedFieldFormat.amount($0, currency: details.fields["Currency"]) : nil }
+                        let line = ([amount] + [details.fields["Provider"], details.fields["Stage"]]).compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                        if !line.isEmpty { Text(line).font(.subheadline).foregroundStyle(.secondary) }
                     } else if !details.summary.isEmpty { Text(details.summary).font(.subheadline).foregroundStyle(.secondary) }
                     if type == .projects {
                         if !(details.fields["Blocked Reason"] ?? "").isEmpty { Label("Blocked: " + (details.fields["Blocked Reason"] ?? ""), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange) }
@@ -1131,13 +1284,24 @@ struct SpecializedTaskListView: View {
                     }
                     if type == .packing, details.fields["Essential"] == "Yes" { Label("Essential", systemImage: "star.fill").font(.caption).foregroundStyle(.orange) }
                     if type == .routines, details.fields["Required"] == "Yes" { Text("Required").font(.caption).foregroundStyle(.secondary) }
-                    if type == .household, let last = details.fields["Last Completed"] { Text("Last done: " + last).font(.caption).foregroundStyle(.secondary) }
+                    if type == .household, let last = details.fields["Last Completed"], !last.isEmpty {
+                        // Past its repeat interval reads as due again.
+                        let age = SpecializedTaskDetails.dateValue(last).map { -SpecializedFieldFormat.dayOffset($0) }
+                        let isDue = !task.isCompleted && age != nil && details.repeatAfterDays.map { (age ?? 0) >= $0 } == true
+                        Text("Last done: " + (SpecializedFieldFormat.date(last) ?? last)).font(.caption).foregroundStyle(isDue ? .orange : .secondary)
+                    }
                     if type == .bills {
-                        ForEach(["Renewal Date", "Notice Date", "Cancellation Deadline"], id: \.self) { key in
-                            if let value = details.fields[key], !value.isEmpty { Text(key + ": " + value).font(.caption).foregroundStyle(.secondary) }
+                        let isOpen = !task.isCompleted && !["Paid", "Canceled"].contains(details.fields["Stage"] ?? "")
+                        ForEach(SpecializedListType.billDeadlineFields, id: \.self) { key in
+                            if let value = details.fields[key], !value.isEmpty {
+                                let isPast = isOpen && SpecializedTaskDetails.dateValue(value).map { SpecializedFieldFormat.dayOffset($0) < 0 } == true
+                                Label(key + ": " + (SpecializedFieldFormat.date(value) ?? value), systemImage: isPast ? "exclamationmark.circle" : "calendar")
+                                    .font(.caption).foregroundStyle(isPast ? .red : .secondary)
+                            }
                         }
                     }
                     if type == .errands, let preparation = details.fields["Before Leaving"], !preparation.isEmpty { Text("Before leaving: " + preparation).font(.caption).lineLimit(2).foregroundStyle(.secondary) }
+                    if type == .appointments, let followUp = SpecializedFieldFormat.date(details.fields["Follow-up Date"]) { Label("Follow-up: " + followUp, systemImage: "arrow.uturn.forward").font(.caption).foregroundStyle(.secondary) }
                     if type == .appointments, let outcome = details.fields["Outcome"], !outcome.isEmpty { Text("Outcome: " + outcome).font(.caption).lineLimit(2).foregroundStyle(.secondary) }
                     if type == .reading {
                         if let progress = details.fields["Progress Detail"], !progress.isEmpty { Text(progress).font(.caption).foregroundStyle(.secondary) }
@@ -1188,7 +1352,11 @@ struct SpecializedTaskListView: View {
                 Menu("Move to Section") {
                     ForEach(sections, id: \.self) { section in Button(section) { Task { await repository.setSpecializedField("Section", value: section, for: task) } } }
                 }
-                Button("Mark as Next Action", systemImage: "arrow.right.circle") { Task { await repository.setSpecializedField("Next Action", value: "Yes", for: task) } }
+                if repository.specializedDetails(task).fields["Next Action"] == "Yes" {
+                    Button("Clear Next Action", systemImage: "arrow.right.circle.fill") { Task { await repository.setSpecializedField("Next Action", value: "No", for: task) } }
+                } else {
+                    Button("Mark as Next Action", systemImage: "arrow.right.circle") { Task { await repository.setSpecializedField("Next Action", value: "Yes", for: task) } }
+                }
             }
             if type == .appointments || type == .errands { Button("Preparation Checklist", systemImage: "checklist") { checklistTask = task } }
             if type == .bills {
@@ -1202,21 +1370,18 @@ struct SpecializedTaskListView: View {
             }
             if type == .errands {
                 let destination = repository.specializedDetails(task).fields["Destination"] ?? ""
-                if !destination.isEmpty {
-                    Button("Open in Maps", systemImage: "map") {
-                        var components = URLComponents(string: "https://maps.apple.com/")
-                        components?.queryItems = [URLQueryItem(name: "q", value: destination)]
-                        if let url = components?.url { openURL(url) }
-                    }
+                if let url = Self.mapsURL(place: task.location, destination: destination, directions: false) {
+                    Button("Open in Maps", systemImage: "map") { openURL(url) }
                 }
+                if let url = Self.mapsURL(place: task.location, destination: destination, directions: true) {
+                    Button("Get Directions", systemImage: "arrow.triangle.turn.up.right.diamond") { openURL(url) }
+                }
+                Button(task.location == nil ? "Add Place" : "Change Place", systemImage: "mappin.and.ellipse") { editingItem = task }
                 if let id = repository.specializedDetails(task).fields["Shopping List ID"], repository.lists.contains(where: { $0.id == id }) { Button("Open Shopping List", systemImage: "cart") { repository.selectedScope = .list(id) } }
             }
             if type == .shopping { Button("Buy Again", systemImage: "cart.badge.plus") { repeatPurchase = task } }
             if type == .routines {
-                Button("Start Timer", systemImage: "timer") {
-                    let minutes = Int(repository.specializedDetails(task).fields["Timer Minutes"] ?? "") ?? task.durationMinutes ?? 5
-                    timerEnd = Date().addingTimeInterval(Double(min(1440, max(1, minutes))) * 60)
-                }
+                Button("Start Timer", systemImage: "timer") { startTimer(for: task) }
             }
             let fields = repository.specializedDetails(task).fields
             if type == .appointments {
@@ -1570,6 +1735,23 @@ struct SpecializedListOptions: View {
                         Text("Prices and budget use " + (Locale.current.currency?.identifier ?? "USD") + ". Estimates exclude tax.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                if type == .bills {
+                    Section {
+                        Toggle("Deadline Reminders", isOn: Binding(get: { repository.listProfile(listID).settings["Deadline Reminders"] != "false" }, set: { enabled in
+                            var profile = repository.listProfile(listID); profile.settings["Deadline Reminders"] = String(enabled); repository.setListProfile(profile, for: listID)
+                            Task { await repository.refreshDeadlineReminders() }
+                        }))
+                        if repository.listProfile(listID).settings["Deadline Reminders"] != "false" {
+                            Picker("Advance Notice", selection: Binding(get: { Int(repository.listProfile(listID).settings["Deadline Lead Days"] ?? "") ?? 3 }, set: { days in
+                                var profile = repository.listProfile(listID); profile.settings["Deadline Lead Days"] = String(days); repository.setListProfile(profile, for: listID)
+                                Task { await repository.refreshDeadlineReminders() }
+                            })) {
+                                Text("On the Day Only").tag(0)
+                                ForEach([1, 3, 7, 14], id: \.self) { Text("\($0) Day\($0 == 1 ? "" : "s") Before").tag($0) }
+                            }
+                        }
+                    } header: { Text("Reminders") } footer: { Text("Open bills alert at 9 AM on their renewal, notice, and cancellation dates, plus the advance notice you choose. Paid or canceled bills stay quiet.") }
+                }
                 Section {
                     if type == .reading {
                         Toggle("Show Thumbnails", isOn: Binding(get: { repository.listProfile(listID).settings["Show Thumbnails"] == "true" }, set: { enabled in
@@ -1802,6 +1984,65 @@ struct SpecializedChecklistView: View {
     }
 }
 
+/// Every open Next Action across Projects lists, the GTD "what can I do now" view.
+struct ProjectNextActionsView: View {
+    @Bindable var repository: TaskRepository
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        let actions = repository.projectNextActions
+        let byList = Dictionary(grouping: actions, by: \.listID)
+        let projectLists = repository.lists.filter { byList[$0.id] != nil }
+        NavigationStack {
+            List {
+                if actions.isEmpty {
+                    ContentUnavailableView("No Next Actions", systemImage: "arrow.right.circle", description: Text("Mark a task as Next Action in any Projects list and it appears here."))
+                }
+                ForEach(projectLists) { list in
+                    Section(list.title) {
+                        ForEach(byList[list.id] ?? []) { task in row(task) }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .taskFlowThemedBackground()
+            .navigationTitle("Next Actions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private func row(_ task: TaskItem) -> some View {
+        let fields = repository.specializedDetails(task).fields
+        let context = [fields["Section"], fields["Milestone"]].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return HStack(alignment: .top, spacing: 12) {
+            Button { Task { await repository.toggleCompletion(for: task) } } label: {
+                Image(systemName: "circle").font(.title2).frame(minWidth: 44, minHeight: 44)
+            }.buttonStyle(.borderless).disabled(repository.isUndoing).accessibilityLabel("Complete " + task.title)
+            Button {
+                repository.selectedScope = .list(task.listID)
+                repository.selectedTaskID = task.id
+                dismiss()
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(task.title).foregroundStyle(.primary)
+                    if !context.isEmpty { Text(context).font(.caption).foregroundStyle(.secondary) }
+                    if let blocked = fields["Blocked Reason"], !blocked.isEmpty {
+                        Label("Blocked: " + blocked, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
+                    }
+                    if let due = task.dueDate {
+                        Text(SpecializedFieldFormat.date(SpecializedTaskDetails.dateText(due)) ?? due.formatted(date: .abbreviated, time: .omitted))
+                            .font(.caption).foregroundStyle(task.isOverdue() ? .red : .secondary)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(.plain)
+        }
+        .swipeActions {
+            Button("Clear", systemImage: "arrow.right.circle") { Task { await repository.setSpecializedField("Next Action", value: "No", for: task) } }
+                .tint(.gray)
+        }
+    }
+}
+
 struct ReadingLinkCapture: View {
     @Bindable var repository: TaskRepository
     let listID: String
@@ -1809,6 +2050,10 @@ struct ReadingLinkCapture: View {
     @State private var title = ""
     @State private var link = ""
     @State private var saving = false
+    @State private var metadata: ReadingLinkMetadata?
+    @State private var fetching = false
+    /// The title last filled in from the page, so a user-typed title is never replaced.
+    @State private var autoTitle = ""
     private var url: URL? {
         guard let url = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
         return url
@@ -1816,21 +2061,64 @@ struct ReadingLinkCapture: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Title", text: $title)
-                TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Text("Save an article, book, or video link to revisit later.").font(.footnote).foregroundStyle(.secondary)
+                Section {
+                    HStack {
+                        TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        // The system paste button reads the clipboard without a permission prompt.
+                        PasteButton(payloadType: URL.self) { urls in
+                            if let pasted = urls.first { link = pasted.absoluteString }
+                        }.labelStyle(.iconOnly).buttonBorderShape(.capsule)
+                    }
+                    HStack {
+                        TextField("Title", text: $title)
+                        if fetching { ProgressView() }
+                    }
+                } footer: { Text("Paste a link to an article, book, or video. TaskFlow fills in the title and details from the page.") }
+                if let metadata, !metadata.fields.isEmpty {
+                    Section("From the Page") {
+                        HStack(alignment: .top, spacing: 12) {
+                            if let thumbnail = metadata.thumbnailURL {
+                                AsyncImage(url: thumbnail) { image in image.resizable().scaledToFill() } placeholder: { Color.secondary.opacity(0.15) }
+                                    .frame(width: 56, height: 72).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                if !metadata.creator.isEmpty { Text(metadata.creator).font(.subheadline) }
+                                Text([metadata.format, metadata.estimatedMinutes.map { "\($0) min read" }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
                 if let error = repository.errorMessage { Text(error).foregroundStyle(.red) }
             }
             .taskFlowThemedBackground()
             .navigationTitle("Save a Link")
             .interactiveDismissDisabled(saving)
+            .task(id: link) { await lookUp() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") {
                     guard let url else { return }; saving = true
-                    Task { if await repository.addReadingLink(title: title, url: url, listID: listID) { dismiss() }; saving = false }
+                    Task { if await repository.addReadingLink(title: title, url: url, listID: listID, metadata: metadata) { dismiss() }; saving = false }
                 }.disabled(saving || url == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }
+        }
+    }
+
+    private func lookUp() async {
+        metadata = nil
+        guard let url else { return }
+        try? await Task.sleep(for: .milliseconds(500)) // Wait for typing to pause.
+        guard !Task.isCancelled else { return }
+        fetching = true
+        defer { fetching = false }
+        let found = await ReadingLinkMetadata.fetch(url)
+        guard !Task.isCancelled, let found else { return }
+        metadata = found
+        let current = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !found.title.isEmpty, current.isEmpty || current == autoTitle {
+            title = String(found.title.prefix(200))
+            autoTitle = title
         }
     }
 }
