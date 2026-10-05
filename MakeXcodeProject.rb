@@ -3,8 +3,8 @@ require "xcodeproj"
 project = Xcodeproj::Project.new("TaskFlow.xcodeproj")
 
 development_team = "RUS98YNC4X"
-marketing_version = "1.01"
-project_version = "1"
+marketing_version = "1.09"
+project_version = "3"
 
 target = project.new_target(:application, "TaskFlow", :ios, "17.0")
 widget_target = project.new_target(:app_extension, "TaskFlowWidgets", :ios, "17.0")
