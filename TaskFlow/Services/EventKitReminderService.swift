@@ -192,6 +192,10 @@ final class EventKitReminderService {
 
         let predicate = store.predicateForEvents(withStart: startDate, end: endDate, calendars: calendars)
         return store.events(matching: predicate)
+            .compactMap { event -> EKEvent? in
+                // These are implicitly unwrapped and can be nil for events in flux (e.g. mid-sync); reading nil traps.
+                event.eventIdentifier == nil || event.calendar == nil || event.startDate == nil || event.endDate == nil ? nil : event
+            }
             .map {
                 CalendarEvent(
                     id: $0.eventIdentifier,
@@ -453,13 +457,14 @@ final class EventKitReminderService {
             let location = Self.decodeLocation(reminder.alarms ?? []) ?? metadata.location
 
             let parentID = metadata.parentID
+            let shoppingNotes = ShoppingReminderNotes.decode(reminder.notes ?? "")
 
             return TaskItem(
                 id: id,
                 metadataID: metadataID,
                 listID: reminder.calendar.calendarIdentifier,
                 title: reminder.title,
-                notes: ShoppingReminderNotes.decode(reminder.notes ?? "").text,
+                notes: shoppingNotes.text,
                 dueDate: dueDate,
                 hasDueTime: hasDueTime,
                 alarmOffsetMinutes: alarmOffset,
@@ -482,7 +487,7 @@ final class EventKitReminderService {
                 blockedByTaskIDs: metadata.blockedByTaskIDs,
                 createdAt: reminder.creationDate,
                 modifiedAt: reminder.lastModifiedDate,
-                sharedShoppingDetails: ShoppingReminderNotes.decode(reminder.notes ?? "").details
+                sharedShoppingDetails: shoppingNotes.details
             )
         } }
 

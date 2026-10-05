@@ -42,14 +42,16 @@ actor CloudMetadataSyncService {
         }
     }
 
-    func downloadAttachments(for references: [CloudAttachmentReference]) async throws -> [CloudAttachmentDownload] {
-        var downloads: [CloudAttachmentDownload] = []
-        for reference in references {
-            if let download = try await downloadAttachment(for: reference) {
-                downloads.append(download)
-            }
+    /// Writes each available attachment straight to its destination and returns
+    /// how many arrived. Files are copied, not loaded, so large photos and
+    /// documents never accumulate in memory, and one attachment missing from
+    /// iCloud does not block the others or fail the whole sync.
+    func downloadAttachments(_ downloads: [CloudAttachmentDownload]) async throws -> Int {
+        var count = 0
+        for download in downloads {
+            if try await downloadAttachment(download) { count += 1 }
         }
-        return downloads
+        return count
     }
 
     private func save(_ snapshot: MetadataSnapshot, replacing existingRecord: CKRecord?) async throws -> MetadataSnapshot {
@@ -93,17 +95,18 @@ actor CloudMetadataSyncService {
         }
     }
 
-    private func downloadAttachment(for reference: CloudAttachmentReference) async throws -> CloudAttachmentDownload? {
-        do {
-            let record = try await database.record(for: attachmentRecordID(for: reference))
-            guard let asset = record[Self.attachmentAssetKey] as? CKAsset,
-                  let fileURL = asset.fileURL
-            else { throw CocoaError(.fileReadCorruptFile) }
-            let data = try Data(contentsOf: fileURL)
-            return CloudAttachmentDownload(reference: reference, data: data)
-        } catch {
-            throw error
-        }
+    private func downloadAttachment(_ download: CloudAttachmentDownload) async throws -> Bool {
+        let record: CKRecord
+        do { record = try await database.record(for: attachmentRecordID(for: download.reference)) }
+        catch let error as CKError where error.code == .unknownItem { return false } // Not uploaded yet by its device.
+        guard let asset = record[Self.attachmentAssetKey] as? CKAsset, let fileURL = asset.fileURL else { return false }
+        let manager = FileManager.default
+        let staging = manager.temporaryDirectory.appendingPathComponent("TaskFlowDownload-\(UUID().uuidString)")
+        defer { try? manager.removeItem(at: staging) }
+        try manager.copyItem(at: fileURL, to: staging)
+        guard !manager.fileExists(atPath: download.destination.path) else { return false }
+        try manager.moveItem(at: staging, to: download.destination)
+        return true
     }
 
     private static func snapshot(from record: CKRecord) -> MetadataSnapshot? {

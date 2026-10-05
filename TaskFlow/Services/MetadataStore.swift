@@ -201,9 +201,10 @@ struct CloudAttachmentUpload {
     let fileURL: URL
 }
 
+/// A missing attachment and where its downloaded file belongs on this device.
 struct CloudAttachmentDownload {
     let reference: CloudAttachmentReference
-    let data: Data
+    let destination: URL
 }
 
 // Frozen value snapshots contain only Codable value data. The store itself is
@@ -212,6 +213,8 @@ private struct PersistenceCopy<Value>: @unchecked Sendable { let value: Value }
 
 final class MetadataStore {
     private let writer = DispatchQueue(label: "TaskFlow.metadata-writer", qos: .utility)
+    // Large attachment copies must not sit ahead of a main-thread `writer.sync` metadata save.
+    private let attachmentWriter = DispatchQueue(label: "TaskFlow.attachment-writer", qos: .utility)
     private var writeGeneration = 0
     private let url: URL
     private let attachmentDirectory: URL
@@ -460,17 +463,11 @@ final class MetadataStore {
         }
     }
 
-    func missingCloudAttachmentReferences() -> [CloudAttachmentReference] {
-        currentSnapshot().cloudAttachmentReferences.filter { reference in
-            guard let fileURL = attachmentURL(forLocalPath: reference.localPath) else { return false }
-            return !FileManager.default.fileExists(atPath: fileURL.path)
-        }
-    }
-
-    func saveDownloadedAttachments(_ downloads: [CloudAttachmentDownload]) {
-        for download in downloads {
-            guard let destination = attachmentURL(forLocalPath: download.reference.localPath) else { continue }
-            try? download.data.write(to: destination, options: [.atomic])
+    func missingCloudAttachmentDownloads() -> [CloudAttachmentDownload] {
+        currentSnapshot().cloudAttachmentReferences.compactMap { reference in
+            guard let fileURL = attachmentURL(forLocalPath: reference.localPath),
+                  !FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+            return CloudAttachmentDownload(reference: reference, destination: fileURL)
         }
     }
 
@@ -494,7 +491,7 @@ final class MetadataStore {
         let target = attachmentDirectory.appendingPathComponent(fileName)
         let attachment = TaskAttachment(kind: kind, title: cleanName, localPath: fileName)
         return try await withCheckedThrowingContinuation { continuation in
-            writer.async {
+            attachmentWriter.async {
                 let scoped = sourceURL?.startAccessingSecurityScopedResource() ?? false
                 defer { if scoped { sourceURL?.stopAccessingSecurityScopedResource() } }
                 do {

@@ -1265,6 +1265,26 @@ struct CalendarWorkspaceSettings: Codable, Equatable {
     var showWeekNumbers = false
     var hideNonworkingHours = false
     var hourHeight: Double = 72
+
+    init() {}
+
+    /// Synced or older values can be out of range; hour grids and steppers build
+    /// ranges from them, and an inverted range traps.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = CalendarWorkspaceSettings()
+        workStart = min(max(try container.decodeIfPresent(Int.self, forKey: .workStart) ?? defaults.workStart, 0), 22)
+        workEnd = min(max(try container.decodeIfPresent(Int.self, forKey: .workEnd) ?? defaults.workEnd, workStart + 1), 23)
+        weekdays = (try container.decodeIfPresent(Set<Int>.self, forKey: .weekdays) ?? defaults.weekdays).filter { (1...7).contains($0) }
+        focusStart = min(max(try container.decodeIfPresent(Int.self, forKey: .focusStart) ?? defaults.focusStart, 0), 22)
+        focusEnd = min(max(try container.decodeIfPresent(Int.self, forKey: .focusEnd) ?? defaults.focusEnd, focusStart + 1), 23)
+        bufferMinutes = min(max(try container.decodeIfPresent(Int.self, forKey: .bufferMinutes) ?? defaults.bufferMinutes, 0), 60)
+        compact = try container.decodeIfPresent(Bool.self, forKey: .compact) ?? defaults.compact
+        showWeekNumbers = try container.decodeIfPresent(Bool.self, forKey: .showWeekNumbers) ?? defaults.showWeekNumbers
+        hideNonworkingHours = try container.decodeIfPresent(Bool.self, forKey: .hideNonworkingHours) ?? defaults.hideNonworkingHours
+        let height = try container.decodeIfPresent(Double.self, forKey: .hourHeight) ?? defaults.hourHeight
+        hourHeight = height.isFinite ? min(max(height, 60), 140) : defaults.hourHeight
+    }
 }
 
 struct SavedCalendarContext: Codable, Identifiable {

@@ -1423,6 +1423,19 @@ final class TaskRepositoryTests: XCTestCase {
         XCTAssertTrue(messages.isEmpty)
     }
 
+    func testCalendarPreferencesClampOutOfRangeSyncedValues() throws {
+        let json = #"{"workStart":23,"workEnd":5,"focusStart":-4,"focusEnd":99,"weekdays":[0,2,9],"hourHeight":0,"bufferMinutes":500}"#
+        let settings = try JSONDecoder().decode(CalendarWorkspaceSettings.self, from: Data(json.utf8))
+        XCTAssertEqual(settings.workStart, 22)
+        XCTAssertEqual(settings.workEnd, 23)
+        XCTAssertEqual(settings.focusStart, 0)
+        XCTAssertEqual(settings.focusEnd, 23)
+        XCTAssertEqual(settings.weekdays, [2])
+        XCTAssertEqual(settings.hourHeight, 60)
+        XCTAssertEqual(settings.bufferMinutes, 60)
+        XCTAssertFalse(settings.compact)
+    }
+
     func testCalendarContextsAndPreferencesRoundTrip() throws {
         var settings = CalendarWorkspaceSettings()
         settings.workStart = 7

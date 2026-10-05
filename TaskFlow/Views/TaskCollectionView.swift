@@ -1,4 +1,5 @@
 import ActivityKit
+import Combine
 import EventKit
 import EventKitUI
 import MapKit
@@ -3767,7 +3768,7 @@ private struct CalendarPreferencesSheet: View {
             Form {
                 Section("Working hours") {
                     Stepper("Start: \(settings.workStart):00", value: $settings.workStart, in: 0...22)
-                    Stepper("End: \(settings.workEnd):00", value: $settings.workEnd, in: (settings.workStart + 1)...23)
+                    Stepper("End: \(settings.workEnd):00", value: $settings.workEnd, in: min(settings.workStart + 1, 23)...23)
                     ForEach(1...7, id: \.self) { day in
                         Toggle(Calendar.current.weekdaySymbols[day - 1], isOn: Binding(get: { settings.weekdays.contains(day) }, set: { enabled in
                             if enabled { settings.weekdays.insert(day) } else { settings.weekdays.remove(day) }
@@ -3776,7 +3777,7 @@ private struct CalendarPreferencesSheet: View {
                 }
                 Section("Preferred focus times") {
                     Stepper("Start: \(settings.focusStart):00", value: $settings.focusStart, in: 0...22)
-                    Stepper("End: \(settings.focusEnd):00", value: $settings.focusEnd, in: (settings.focusStart + 1)...23)
+                    Stepper("End: \(settings.focusEnd):00", value: $settings.focusEnd, in: min(settings.focusStart + 1, 23)...23)
                     Stepper("Meeting buffer: \(settings.bufferMinutes) min", value: $settings.bufferMinutes, in: 0...60, step: 5)
                 }
                 Section("Layout") {
@@ -3807,8 +3808,8 @@ private struct CalendarHourGrid: View {
     let color: (String) -> Color
 
     private var calendar: Calendar { .current }
-    private var firstHour: Int { settings.hideNonworkingHours ? settings.workStart : 0 }
-    private var lastHour: Int { settings.hideNonworkingHours ? settings.workEnd : 24 }
+    private var firstHour: Int { settings.hideNonworkingHours ? min(max(settings.workStart, 0), 23) : 0 }
+    private var lastHour: Int { settings.hideNonworkingHours ? min(max(settings.workEnd, firstHour + 1), 24) : 24 }
     private var gridHeight: CGFloat { CGFloat(lastHour - firstHour) * CGFloat(settings.hourHeight) }
     private var dayStart: Date { calendar.startOfDay(for: date) }
     private var dayEnd: Date { calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400) }
@@ -4493,7 +4494,8 @@ struct CalendarConflictCheckerPage: View {
             }
             .task(id: scanKey) { scan() }
             .refreshable { scan() }
-            .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in scan() }
+            // EventKit posts bursts (including for our own saves); a scan is a synchronous 90-day fetch.
+            .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged).debounce(for: .milliseconds(500), scheduler: RunLoop.main)) { _ in scan() }
             .sheet(item: $editDraft, onDismiss: { scan() }) { draft in CalendarEventEditorView(repository: repository, draft: draft) }
             .sheet(item: $detailsEvent, onDismiss: { scan() }) { event in CalendarEventDetailView(repository: repository, event: event, color: color(event)) }
             .sheet(item: $moveEvent, onDismiss: { scan() }) { event in

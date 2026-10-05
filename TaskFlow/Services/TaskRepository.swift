@@ -167,7 +167,14 @@ final class TaskRepository {
             taskFilterRevision &+= 1
             linkedNoteURLs = Set(tasks.compactMap(\.url))
             childrenByParent = Dictionary(grouping: tasks.filter { $0.parentID != nil }, by: { $0.parentID! })
+            taskIndexByID = Dictionary(tasks.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         }
+    }
+    /// Constant-time lookup; per-task helpers run inside loops over every task.
+    @ObservationIgnored private var taskIndexByID: [String: Int] = [:]
+    private func currentTask(id: String) -> TaskItem? {
+        guard let index = taskIndexByID[id], tasks.indices.contains(index), tasks[index].id == id else { return nil }
+        return tasks[index]
     }
     private(set) var tasksRevision = 0
     private(set) var notesRevision = 0
@@ -185,7 +192,7 @@ final class TaskRepository {
         metadataStore.listProfiles = listProfiles
     }
     func specializedDetails(_ task: TaskItem) -> SpecializedTaskDetails {
-        tasks.first(where: { $0.id == task.id })?.sharedShoppingDetails ?? task.sharedShoppingDetails ?? specializedTasks[task.metadataID] ?? specializedTasks[task.id] ?? SpecializedTaskDetails()
+        currentTask(id: task.id)?.sharedShoppingDetails ?? task.sharedShoppingDetails ?? specializedTasks[task.metadataID] ?? specializedTasks[task.id] ?? SpecializedTaskDetails()
     }
     func setSpecializedDetails(_ details: SpecializedTaskDetails, for task: TaskItem) {
         if specializedTasks[task.metadataID] != details {
@@ -204,7 +211,7 @@ final class TaskRepository {
     }
     func saveSpecializedDetails(_ details: SpecializedTaskDetails, for task: TaskItem, type: SpecializedListType) async -> Bool {
         guard !isUndoing else { return false }
-        let current = tasks.first { $0.id == task.id } ?? task
+        let current = currentTask(id: task.id) ?? task
         let previous = specializedDetails(current)
         guard previous != details else { return true }
         let stage = details.fields[type == .reading ? "Progress" : "Stage"] ?? ""
@@ -248,8 +255,8 @@ final class TaskRepository {
     }
     func moveProjectItems(_ items: [TaskItem], to section: String) {
         guard !isUndoing, !items.isEmpty else { return }
-        let current = items.map { item in tasks.first { $0.id == item.id } ?? item }
-        let previous = Dictionary(uniqueKeysWithValues: current.map { ($0.id, specializedDetails($0)) })
+        let current = items.map { item in currentTask(id: item.id) ?? item }
+        let previous = Dictionary(current.map { ($0.id, specializedDetails($0)) }, uniquingKeysWith: { first, _ in first })
         for task in current {
             var details = specializedDetails(task)
             details.fields["Section"] = section
@@ -358,7 +365,7 @@ final class TaskRepository {
         return result
     }
     func saveShoppingEstimate(_ price: Double, for task: TaskItem) async -> Bool {
-        guard price.isFinite, price >= 0, let current = tasks.first(where: { $0.id == task.id }) else { return false }
+        guard price.isFinite, price >= 0, let current = currentTask(id: task.id) else { return false }
         var details = specializedDetails(current)
         details.fields["Price"] = ShoppingQuantity.text(price)
         guard await saveSpecializedDetails(details, for: current, type: .shopping) else { return false }
@@ -415,7 +422,7 @@ final class TaskRepository {
     func shoppingQuantityIsUpdating(_ id: String) -> Bool { shoppingQuantityUpdates.contains(id) }
     func adjustShoppingQuantity(_ task: TaskItem, by change: Double) async {
         guard !shoppingQuantityUpdates.contains(task.id), !isUndoing,
-              let current = tasks.first(where: { $0.id == task.id }), !current.isCompleted,
+              let current = currentTask(id: task.id), !current.isCompleted,
               let value = ShoppingQuantity.value(specializedDetails(current).fields["Quantity"]) else { return }
         let next = value + change
         guard next.isFinite, next > 0 else { return }
@@ -631,6 +638,7 @@ final class TaskRepository {
     private var isCloudSyncRunning = false
     private var hasPendingCloudSync = false
     private var cloudPreferencesObserver: NSObjectProtocol?
+    @ObservationIgnored private var cloudPreferencesCapture: Task<Void, Never>?
     var cloudSyncStatus = "Not synced yet"
     private static let syncedPreferenceKeys = [
         "TaskFlow.appTheme", "TaskFlow.appearanceMode", "TaskFlow.taskDensity",
@@ -734,9 +742,8 @@ final class TaskRepository {
             // photo or document must not hide an already-merged note.
             if metadataChanged { await loadAllData() }
             try await cloudSync.uploadAttachments(metadataStore.localAttachmentUploads())
-            let downloads = try await cloudSync.downloadAttachments(for: metadataStore.missingCloudAttachmentReferences())
-            metadataStore.saveDownloadedAttachments(downloads)
-            if !downloads.isEmpty {
+            let downloaded = try await cloudSync.downloadAttachments(metadataStore.missingCloudAttachmentDownloads())
+            if downloaded > 0 {
                 attachmentContentRevision &+= 1
                 await loadAllData()
             }
@@ -887,19 +894,27 @@ final class TaskRepository {
         selectedEventCalendarIDs = Set(preferences.stringArray(forKey: TaskFlowSharedSettings.selectedEventCalendarIDsKey) ?? [])
     }
 
+    /// Scroll anchors and comment drafts write preferences continuously; coalesce
+    /// them so scrolling and typing do not re-encode every synced setting.
+    private func preferencesDidChange() {
+        cloudPreferencesCapture?.cancel()
+        cloudPreferencesCapture = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, let self, !self.isApplyingCloudSnapshot else { return }
+            // Ignore unrelated device-only preferences and unchanged synced values.
+            let before = self.metadataStore.currentSnapshot().syncedSettings
+            self.isApplyingCloudSnapshot = true
+            self.captureCloudSettings()
+            self.isApplyingCloudSnapshot = false
+            if before != self.metadataStore.currentSnapshot().syncedSettings { self.scheduleCloudSync() }
+        }
+    }
+
     func bootstrap() async {
         cloudSyncEnabled = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
         if cloudPreferencesObserver == nil {
             cloudPreferencesObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: preferences, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self, !self.isApplyingCloudSnapshot else { return }
-                    // Ignore unrelated device-only preferences and unchanged synced values.
-                    let before = self.metadataStore.currentSnapshot().syncedSettings
-                    self.isApplyingCloudSnapshot = true
-                    self.captureCloudSettings()
-                    self.isApplyingCloudSnapshot = false
-                    if before != self.metadataStore.currentSnapshot().syncedSettings { self.scheduleCloudSync() }
-                }
+                Task { @MainActor [weak self] in self?.preferencesDidChange() }
             }
         }
         metadataStore.onChange = { [weak self] in
@@ -937,7 +952,7 @@ final class TaskRepository {
     }
 
     func openTask(id: String) {
-        guard let task = tasks.first(where: { $0.id == id }) else {
+        guard let task = currentTask(id: id) else {
             pendingOpenTaskID = id
             return
         }
@@ -1060,7 +1075,7 @@ final class TaskRepository {
 
     var selectedTask: TaskItem? {
         guard let selectedTaskID else { return nil }
-        return tasks.first { $0.id == selectedTaskID }
+        return currentTask(id: selectedTaskID)
     }
 
     var isSearchActive: Bool {
@@ -1329,12 +1344,13 @@ final class TaskRepository {
         }
         guard isSearchActive else { return result }
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let calendarTitles = Dictionary(eventCalendars.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
         return result.filter { event in
             event.title.localizedCaseInsensitiveContains(q) ||
             (event.location?.localizedCaseInsensitiveContains(q) ?? false) ||
             (event.notes?.localizedCaseInsensitiveContains(q) ?? false) ||
             event.tags.contains { $0.localizedCaseInsensitiveContains(q) } ||
-            (eventCalendars.first { $0.id == event.calendarID }?.title.localizedCaseInsensitiveContains(q) ?? false)
+            (calendarTitles[event.calendarID]?.localizedCaseInsensitiveContains(q) ?? false)
         }
     }
 
@@ -1461,7 +1477,7 @@ final class TaskRepository {
     func toggleCompletion(for task: TaskItem) async {
         guard !isUndoing else { return }
         do {
-            let current = tasks.first { $0.id == task.id } ?? task
+            let current = currentTask(id: task.id) ?? task
             let previousDetails = specializedDetails(current)
             var updatedDetails = previousDetails
             if !current.isCompleted { updatedDetails.fields["Last Completed"] = SpecializedTaskDetails.dateText(Date()) }
@@ -1617,7 +1633,7 @@ final class TaskRepository {
         guard !isUndoing else { return }
         var changed: [TaskItem] = []
         for id in ids {
-            if let task = tasks.first(where: { $0.id == id }) {
+            if let task = currentTask(id: id) {
                 var draft = TaskDraft(task: task)
                 var merged = draft.tags
                 for tag in newTags where !merged.contains(where: { $0.localizedCaseInsensitiveCompare(tag) == .orderedSame }) {
@@ -1644,7 +1660,7 @@ final class TaskRepository {
         guard !isUndoing else { return }
         var changed: [TaskItem] = []
         for id in ids {
-            if let task = tasks.first(where: { $0.id == id }) {
+            if let task = currentTask(id: id) {
                 var draft = TaskDraft(task: task)
                 draft.tags.removeAll { t in remove.contains { $0.localizedCaseInsensitiveCompare(t) == .orderedSame } }
                 do {
@@ -2056,7 +2072,7 @@ final class TaskRepository {
     func saveShoppingItem(_ draft: TaskDraft, details: SpecializedTaskDetails) async -> Bool {
         guard !isUndoing, !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         do {
-            let previous = tasks.first { $0.id == draft.reminderID }
+            let previous = draft.reminderID.flatMap { currentTask(id: $0) }
             let previousDetails = previous.map { specializedDetails($0) }
             var details = previous == nil ? recallingShoppingPrice(title: draft.title, details: details) : details
             if previous == nil {
@@ -2084,7 +2100,7 @@ final class TaskRepository {
 
     func saveTask(_ draft: TaskDraft) async -> Bool {
         guard !isUndoing else { return false }
-        let previous = tasks.first { $0.id == draft.reminderID }
+        let previous = draft.reminderID.flatMap { currentTask(id: $0) }
         do {
             _ = try reminderService.saveTask(draft, metadataStore: metadataStore)
             if let previous { offerUndo("Task updated", previous: [previous]) }
@@ -2118,6 +2134,11 @@ final class TaskRepository {
                 deleted.append(task)
             } catch { errorMessage = error.localizedDescription }
         }
+        if !deleted.isEmpty {
+            // A fetch started before these deletions must not restore them.
+            taskFetchGeneration &+= 1
+            taskRefresh = nil
+        }
         offerUndo("Delete Tasks", previous: deleted, deleted: true)
         let removed = Set(deleted.map(\.id))
         tasks.removeAll { removed.contains($0.id) }
@@ -2128,7 +2149,7 @@ final class TaskRepository {
     func deleteTask(_ task: TaskItem) async {
         guard !isUndoing else { return }
         do {
-            let current = tasks.first { $0.id == task.id } ?? task
+            let current = currentTask(id: task.id) ?? task
             try reminderService.deleteTask(id: task.id, metadataStore: metadataStore)
             taskFetchGeneration &+= 1
             taskRefresh = nil
@@ -2143,7 +2164,7 @@ final class TaskRepository {
 
     func makeDraft(parentID: String? = nil) -> TaskDraft {
         let contextID: String?
-        if let parentID, let parent = tasks.first(where: { $0.id == parentID }) {
+        if let parentID, let parent = currentTask(id: parentID) {
             contextID = parent.listID
         } else if case .list(let id) = selectedScope {
             contextID = id
@@ -2393,7 +2414,7 @@ final class TaskRepository {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let comment = TaskComment(text: text)
-        var updated = tasks.first(where: { $0.id == task.id }) ?? task
+        var updated = currentTask(id: task.id) ?? task
         updated.comments.append(comment)
         updateTaskInMemory(updated)
         var meta = metadataStore.metadata(for: task.id, cloudID: task.metadataID)
@@ -2402,7 +2423,7 @@ final class TaskRepository {
     }
 
     func toggleComment(_ comment: TaskComment, on task: TaskItem) async {
-        var updated = tasks.first(where: { $0.id == task.id }) ?? task
+        var updated = currentTask(id: task.id) ?? task
         if let idx = updated.comments.firstIndex(where: { $0.id == comment.id }) {
             updated.comments[idx].isResolved.toggle()
             updateTaskInMemory(updated)
@@ -2415,7 +2436,7 @@ final class TaskRepository {
     func editComment(_ comment: TaskComment, text: String, on task: TaskItem) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        var updated = tasks.first(where: { $0.id == task.id }) ?? task
+        var updated = currentTask(id: task.id) ?? task
         guard let index = updated.comments.firstIndex(where: { $0.id == comment.id }),
               updated.comments[index].text != text else { return }
         updated.comments[index].text = text
@@ -2424,7 +2445,7 @@ final class TaskRepository {
     }
 
     func deleteComment(_ comment: TaskComment, on task: TaskItem) async {
-        var updated = tasks.first(where: { $0.id == task.id }) ?? task
+        var updated = currentTask(id: task.id) ?? task
         updated.comments.removeAll { $0.id == comment.id }
         saveComments(on: updated)
     }
@@ -2520,7 +2541,13 @@ final class TaskRepository {
     }
 
     private func loadAllData(includeMetadata: Bool = true) async {
-        if let loadingTask { await loadingTask.value; return }
+        if let loadingTask {
+            await loadingTask.value
+            // The shared load may have skipped local metadata (an EventKit-only
+            // reload); a cloud merge waiting on it still needs its notes and settings.
+            if includeMetadata { applyMetadata() }
+            return
+        }
         let work = Task { await self.performLoad(includeMetadata: includeMetadata) }
         loadingTask = work
         await work.value
@@ -2533,19 +2560,7 @@ final class TaskRepository {
         isLoading = !hasLoadedInitialData
         defer { isLoading = false; hasLoadedInitialData = true }
         // Local notes are independent of Reminders permission.
-        if includeMetadata || !hasLoadedInitialData {
-            savedTags = metadataStore.savedTags
-            eventTags = metadataStore.eventTags
-            quickNotes = metadataStore.quickNotes
-            smartLists = metadataStore.smartLists
-            listProfiles = metadataStore.listProfiles
-            specializedTasks = metadataStore.specializedTasks
-            listTemplates = metadataStore.listTemplates
-            let savedPinnedOrder = metadataStore.pinnedListIDs
-            let seededOrder = Self.seededPinnedOrder(savedPinnedOrder)
-            pinnedItemOrder = seededOrder
-            pinnedListIDs = Set(seededOrder.filter { !Self.isBuiltInPinnedID($0) })
-        }
+        if includeMetadata || !hasLoadedInitialData { applyMetadata() }
 
         accessState = reminderService.authorizationState
         updateCalendarAccessState()
@@ -2565,6 +2580,20 @@ final class TaskRepository {
         eventCalendars = eventAccessState == .granted ? reminderService.loadEventCalendars() : []
         await refreshCalendarEvents()
         await rescheduleNotifications()
+    }
+
+    private func applyMetadata() {
+        savedTags = metadataStore.savedTags
+        eventTags = metadataStore.eventTags
+        quickNotes = metadataStore.quickNotes
+        smartLists = metadataStore.smartLists
+        listProfiles = metadataStore.listProfiles
+        specializedTasks = metadataStore.specializedTasks
+        listTemplates = metadataStore.listTemplates
+        let savedPinnedOrder = metadataStore.pinnedListIDs
+        let seededOrder = Self.seededPinnedOrder(savedPinnedOrder)
+        pinnedItemOrder = seededOrder
+        pinnedListIDs = Set(seededOrder.filter { !Self.isBuiltInPinnedID($0) })
     }
 
     private struct CalendarFetchKey: Hashable {
