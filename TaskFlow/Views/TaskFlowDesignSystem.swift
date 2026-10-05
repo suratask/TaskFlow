@@ -1,0 +1,57 @@
+import SwiftUI
+import UIKit
+
+enum TaskFlowTheme {
+    // Match the system's inset-grouped list cells so remaining containers read as native sections.
+    static var surface: Color { themedColor(base: .secondarySystemGroupedBackground, strength: 0.07) }
+    static var insetSurface: Color { themedColor(base: .tertiarySystemGroupedBackground, strength: 0.10) }
+    static func themedColor(base: UIColor, strength: CGFloat, theme: TaskRepository.AppTheme? = nil) -> Color {
+        let selected = theme ?? (TaskRepository.AppTheme(rawValue: UserDefaults.standard.string(forKey: "TaskFlow.appTheme") ?? "") ?? .system)
+        if selected == .system { return Color(uiColor: base) }
+        return Color(uiColor: UIColor { traits in
+            let original = base.resolvedColor(with: traits)
+            let accent = UIColor(selected.primary).resolvedColor(with: traits)
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
+            guard original.getRed(&r, green: &g, blue: &b, alpha: &a), accent.getRed(&ar, green: &ag, blue: &ab, alpha: &aa) else { return original }
+            let amount = traits.userInterfaceStyle == .dark ? min(0.24, strength * 1.4) : strength
+            return UIColor(red: r * (1 - amount) + ar * amount, green: g * (1 - amount) + ag * amount, blue: b * (1 - amount) + ab * amount, alpha: a)
+        })
+    }
+    static let cardRadius: CGFloat = 12
+    static let badgeRadius: CGFloat = 6
+    static let border = Color.clear
+}
+
+/// The standard grouped background used by Settings, Reminders, and other system apps.
+struct TaskFlowBackground: View {
+    var accent: Color = .blue
+    @AppStorage("TaskFlow.appTheme") private var themeName = TaskRepository.AppTheme.system.rawValue
+
+    var body: some View {
+        TaskFlowTheme.themedColor(base: .systemGroupedBackground, strength: 0.15, theme: TaskRepository.AppTheme(rawValue: themeName) ?? .system)
+            .ignoresSafeArea()
+    }
+}
+
+extension View {
+    /// Lets the iOS 26 tab bar shrink while scrolling, as in Apple's apps. No effect on earlier versions.
+    @ViewBuilder
+    func minimizingTabBarOnScroll() -> some View {
+        if #available(iOS 26.0, *) {
+            tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            self
+        }
+    }
+}
+
+
+private struct TaskFlowThemedBackgroundModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.scrollContentBackground(.hidden).background(TaskFlowBackground())
+    }
+}
+extension View {
+    func taskFlowThemedBackground() -> some View { modifier(TaskFlowThemedBackgroundModifier()) }
+}

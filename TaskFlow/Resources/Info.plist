@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>TaskFlow Studio</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.surratt.TaskFlow</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>taskflow</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>TaskFlow Studio uses Calendar access to show events alongside due tasks in the calendar view.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>TaskFlow Studio uses Calendar access to show events alongside due tasks in the calendar view.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TaskFlow Studio uses your microphone to dictate notes.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>TaskFlow Studio uses Reminders access to create lists, tasks, subtasks, due dates, completion state, and priority in Apple Reminders.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>TaskFlow Studio uses Reminders access to create and manage your Apple Reminders tasks.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>TaskFlow Studio transcribes your dictation into editable note text.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+</dict>
+</plist>
