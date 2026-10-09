@@ -457,7 +457,7 @@ struct TodayDashboardView: View {
                             .accessibilityValue("\(seconds / 3600) hours, \((seconds % 3600) / 60) minutes, \(seconds % 60) seconds")
                         }
                     } else {
-                        Label("Connect Calendar to calculate available time", systemImage: "clock")
+                        Label("Available time appears when Calendar events are shown", systemImage: "clock")
                             .font(.subheadline).fixedSize(horizontal: false, vertical: true)
                     }
                 }.buttonStyle(.plain)
@@ -678,7 +678,19 @@ struct TodayDashboardView: View {
         case .finished: Label("No more timed events today", systemImage: "calendar.badge.checkmark").foregroundStyle(.secondary)
         case .empty:
             if repository.eventAccessState == .granted { Label("Nothing scheduled on your calendar today", systemImage: "calendar").foregroundStyle(.secondary) }
-            else { Button("Connect Calendar", systemImage: "calendar") { Task { await repository.requestEventCalendarAccess() } } }
+            else {
+                // Neutral wording before the system prompt (App Review 5.1.1(iv)); Settings once declined.
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Calendar events can appear here alongside your tasks.", systemImage: "calendar").foregroundStyle(.secondary)
+                    if repository.eventAccessState == .unknown {
+                        Button("Continue") { Task { await repository.requestEventCalendarAccess() } }
+                    } else {
+                        Button("Open Settings") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                        }
+                    }
+                }
+            }
         }
     }
     private func spotlightCard(_ event: CalendarEvent, status: String, time: String) -> some View {
