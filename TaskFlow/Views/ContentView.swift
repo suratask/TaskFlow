@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import EventKit
 import CoreSpotlight
 import Combine
@@ -525,8 +526,10 @@ private struct OnboardingView: View {
                     .foregroundStyle(.green)
                     .accessibilityLabel("Allowed")
             } else {
-                Button("Allow", action: action)
+                // Neutral wording (App Review 5.1.1(iv)): the system prompt is where the user decides.
+                Button("Continue", action: action)
                     .buttonStyle(.bordered)
+                    .accessibilityLabel("Continue to \(title) permission")
             }
         }
     }
@@ -567,7 +570,7 @@ private struct OnboardingPage: Identifiable {
             icon: "checklist",
             color: .green,
             bullets: ["Create and edit reminder tasks", "Use lists as workspaces", "Complete tasks from widgets"],
-            actionTitle: "Enable Reminders",
+            actionTitle: "Continue",
             action: .reminders
         ),
         OnboardingPage(
@@ -597,7 +600,7 @@ private struct OnboardingPage: Identifiable {
             icon: "calendar.badge.plus",
             color: .teal,
             bullets: ["Show selected event calendars", "Open event locations in Maps", "Compare tasks and meetings"],
-            actionTitle: "Enable Calendar Events",
+            actionTitle: "Continue",
             action: .calendar
         ),
         OnboardingPage(
@@ -607,7 +610,7 @@ private struct OnboardingPage: Identifiable {
             icon: "bell.badge.fill",
             color: .orange,
             bullets: ["Use the Today widget", "Complete tasks from the widget", "Get due-task alerts"],
-            actionTitle: "Enable Notifications",
+            actionTitle: "Continue",
             action: .notifications
         )
     ]
@@ -846,13 +849,6 @@ private struct SidebarView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button("Settings", systemImage: "gearshape") { isShowingSettings = true }
             }
-            if repository.accessState != .granted {
-                ToolbarItem(placement: .secondaryAction) {
-                    Button("Enable") {
-                        Task { await repository.requestAccess() }
-                    }
-                }
-            }
         }
         .overlay {
             if repository.accessState != .granted {
@@ -933,10 +929,19 @@ private struct AccessOverlay: View {
         } description: {
             Text(repository.accessState.message)
         } actions: {
-            Button("Allow Reminders Access") {
-                Task { await repository.requestAccess() }
+            if repository.accessState == .unknown {
+                // Neutral wording (App Review 5.1.1(iv)): the system prompt is where the user decides.
+                Button("Continue") {
+                    Task { await repository.requestAccess() }
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                // Once denied, iOS won't ask again; only Settings can change it.
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
         }
         .background(.regularMaterial)
     }

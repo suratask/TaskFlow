@@ -355,7 +355,7 @@ struct TodayDashboardView: View {
                 Section {
                     Text(repository.accessState.message).foregroundStyle(.secondary)
                     if repository.accessState == .unknown {
-                        Button("Connect Reminders") { Task { await repository.requestAccess() } }
+                        Button("Continue") { Task { await repository.requestAccess() } }
                     }
                 }
             }

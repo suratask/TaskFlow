@@ -149,7 +149,7 @@ struct SettingsView: View {
                                 Button {
                                     Task { await repository.requestEventCalendarAccess() }
                                 } label: {
-                                    Label("Enable Calendar Events", systemImage: "calendar.badge.plus")
+                                    Label("Continue", systemImage: "calendar.badge.plus")
                                 }
                             } else if repository.eventAccessState == .granted {
                                 if repository.eventCalendars.isEmpty {
@@ -551,7 +551,8 @@ private struct SettingsPermissionsSection: View {
         VStack(alignment: .leading, spacing: 6) {
             LabeledContent { Text(status).foregroundStyle(.secondary) } label: { Label(title, systemImage: icon) }
             if canRequest {
-                Button("Allow \(title)") {
+                // Neutral wording (App Review 5.1.1(iv)): the system prompt is where the user decides.
+                Button("Continue") {
                     requesting = true
                     Task {
                         await request()
@@ -560,6 +561,7 @@ private struct SettingsPermissionsSection: View {
                     }
                 }
                 .disabled(requesting)
+                .accessibilityLabel("Continue to \(title) permission")
             } else if status == "Denied" || status == "Add-only Access" {
                 Button("Manage in Settings") { openSystemSettings() }
             }

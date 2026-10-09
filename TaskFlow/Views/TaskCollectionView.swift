@@ -1984,7 +1984,11 @@ struct CalendarEventEditorView: View {
                     Label("Calendar Access Needed", systemImage: "calendar.badge.exclamationmark")
                 } description: { Text(repository.eventAccessState.message) } actions: {
                     if repository.eventAccessState == .unknown {
-                        Button("Allow Calendar Access") { Task { await repository.requestEventCalendarAccess() } }.buttonStyle(.borderedProminent)
+                        Button("Continue") { Task { await repository.requestEventCalendarAccess() } }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Open Settings") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                        }
                     }
                 }
             }
@@ -3039,7 +3043,7 @@ private struct EmptyTaskStateView: View {
                     Button {
                         Task { await repository.requestAccess() }
                     } label: {
-                        Label("Connect Reminders", systemImage: "arrow.triangle.2.circlepath")
+                        Label("Continue", systemImage: "arrow.triangle.2.circlepath")
                     }
                     .buttonStyle(.borderedProminent)
                 } else if repository.accessState == .denied {
@@ -4461,7 +4465,13 @@ struct CalendarConflictCheckerPage: View {
                 if repository.eventAccessState != .granted {
                     Section {
                         ContentUnavailableView("Calendar Access Needed", systemImage: "calendar.badge.exclamationmark", description: Text(repository.eventAccessState.message))
-                        Button("Allow Calendar Access") { Task { await repository.requestEventCalendarAccess(); scan() } }
+                        if repository.eventAccessState == .unknown {
+                            Button("Continue") { Task { await repository.requestEventCalendarAccess(); scan() } }
+                        } else {
+                            Button("Open Settings") {
+                                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                            }
+                        }
                     }
                 } else if end < start {
                     Section { Label("Choose an end date on or after the start date", systemImage: "exclamationmark.triangle") }
