@@ -176,14 +176,14 @@ final class TaskRepository {
     }
     /// Constant-time lookup; per-task helpers run inside loops over every task.
     @ObservationIgnored var taskIndexByID: [String: Int] = [:]
-    private func currentTask(id: String) -> TaskItem? {
+    func currentTask(id: String) -> TaskItem? {
         guard let index = taskIndexByID[id], tasks.indices.contains(index), tasks[index].id == id else { return nil }
         return tasks[index]
     }
-    private(set) var tasksRevision = 0
-    private(set) var notesRevision = 0
-    private(set) var attachmentContentRevision = 0
-    private(set) var linkedNoteURLs: Set<URL> = []
+    var tasksRevision = 0
+    var notesRevision = 0
+    var attachmentContentRevision = 0
+    var linkedNoteURLs: Set<URL> = []
     @ObservationIgnored var childrenByParent: [String: [TaskItem]] = [:]
     var listProfiles: [String: SpecializedListProfile] = [:] { didSet { taskFilterRevision &+= 1 } }
     var specializedTasks: [String: SpecializedTaskDetails] = [:] { didSet { taskFilterRevision &+= 1 } }
@@ -205,7 +205,7 @@ final class TaskRepository {
             }
         }
     }
-    private(set) var rememberedShoppingShopperNames: [String] = [] {
+    var rememberedShoppingShopperNames: [String] = [] {
         didSet { preferences.set(rememberedShoppingShopperNames, forKey: "TaskFlow.shoppingShopperNames") }
     }
     var shoppingQuantityUpdates: Set<String> = []
@@ -298,7 +298,7 @@ final class TaskRepository {
     var cloudPreferencesObserver: NSObjectProtocol?
     @ObservationIgnored var cloudPreferencesCapture: Task<Void, Never>?
     var cloudSyncStatus = "Not synced yet"
-    private static let syncedPreferenceKeys = [
+    static let syncedPreferenceKeys = [
         "TaskFlow.appTheme", "TaskFlow.appearanceMode", "TaskFlow.taskDensity",
         "TaskFlow.taskViewMode", "TaskFlow.taskGroupOption", "TaskFlow.taskSortOption",
         "TaskFlow.todaySectionOrder", "TaskFlow.todayHiddenSections",
@@ -309,7 +309,7 @@ final class TaskRepository {
         "TaskFlow.shoppingPriceHistory"
     ]
 
-    private func scheduleCloudSync() {
+    func scheduleCloudSync() {
         guard cloudSyncEnabled, !isApplyingCloudSnapshot else { return }
         if isCloudSyncRunning { hasPendingCloudSync = true; return }
         cloudSyncTask?.cancel()
@@ -392,10 +392,10 @@ final class TaskRepository {
     }
     var taskFilterRevision = 0
     @ObservationIgnored var taskFilterCacheKey: [String] = []
-    @ObservationIgnored private var taskFilterCacheResult: [TaskItem] = []
-    @ObservationIgnored private var taskFilterCacheExpiry = Date.distantPast
+    @ObservationIgnored var taskFilterCacheResult: [TaskItem] = []
+    @ObservationIgnored var taskFilterCacheExpiry = Date.distantPast
 
-    private func filteredTaskItems(includeCompleted: Bool, completedOnly: Bool = false) -> [TaskItem] {
+    func filteredTaskItems(includeCompleted: Bool, completedOnly: Bool = false) -> [TaskItem] {
         let now = Date()
         let key = [String(taskFilterRevision), String(reflecting: selectedScope), searchQuery,
                    String(reflecting: selectedTagFilter), String(reflecting: quickTagFilter),
@@ -413,8 +413,8 @@ final class TaskRepository {
         return result
     }
     @ObservationIgnored var groupCacheKey: [String] = []
-    @ObservationIgnored private var groupCacheResult: [TaskGroup] = []
-    @ObservationIgnored private var groupCacheExpiry = Date.distantPast
+    @ObservationIgnored var groupCacheResult: [TaskGroup] = []
+    @ObservationIgnored var groupCacheExpiry = Date.distantPast
 
     var groupedTasks: [TaskGroup] { cachedGroups(rootsOnly: false) }
     enum TaskFilterKind: String, CaseIterable, Identifiable {
@@ -450,10 +450,10 @@ final class TaskRepository {
     var previousEventEdit: EventDraft?
     var previousEventBatchIDs: [String] = []
     var eventSaveStatus = ""
-    private(set) var lastEventDeletion: EventDeletion?
+    var lastEventDeletion: EventDeletion?
     var deletingEventKeys: Set<String> = []
-    private(set) var lastSavedEventID: String?
-    private(set) var lastAvailabilityEventID: String?
+    var lastSavedEventID: String?
+    var lastAvailabilityEventID: String?
     var calendarAnchor = Date()
     var readingPreviewJobs: Set<String> = []
     var refreshingShows: Set<String> = []
