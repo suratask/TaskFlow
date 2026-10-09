@@ -56,6 +56,7 @@ final class TaskFlowAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        TaskFlowMetrics.shared.start() // Daily crash, hang, and launch-time reports from real use.
         UNUserNotificationCenter.current().setNotificationCategories(EpisodeNotificationActions.categories)
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.watchRefreshID, using: nil) { task in
             guard let refresh = task as? BGAppRefreshTask else { task.setTaskCompleted(success: false); return }

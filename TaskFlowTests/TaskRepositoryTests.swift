@@ -2711,6 +2711,12 @@ final class TaskRepositoryTests: XCTestCase {
         XCTAssertEqual(groups.first?.tasks.map(\.id), ["late"])
     }
 
+    func testDiagnosticsMedianUsesBucketMidpoints() {
+        XCTAssertNil(TaskFlowMetrics.medianMilliseconds([]))
+        XCTAssertEqual(TaskFlowMetrics.medianMilliseconds([(midpoint: 250, count: 3), (midpoint: 750, count: 1)]), 250)
+        XCTAssertEqual(TaskFlowMetrics.medianMilliseconds([(midpoint: 900, count: 5), (midpoint: 300, count: 1)]), 900)
+    }
+
     func testCalendarPreferencesClampOutOfRangeSyncedValues() throws {
         let json = #"{"workStart":23,"workEnd":5,"focusStart":-4,"focusEnd":99,"weekdays":[0,2,9],"hourHeight":0,"bufferMinutes":500}"#
         let settings = try JSONDecoder().decode(CalendarWorkspaceSettings.self, from: Data(json.utf8))

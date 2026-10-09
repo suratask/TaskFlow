@@ -902,6 +902,7 @@ struct InlineNewTaskRow: View {
                 .frame(width: 30)
                 .accessibilityHidden(true)
             TextField("New Task  ·  try “tomorrow 9am #home !high”", text: $title)
+                .accessibilityIdentifier("inline-new-task-field")
                 .focused($isFocused)
                 .submitLabel(.done)
                 .onSubmit(add)

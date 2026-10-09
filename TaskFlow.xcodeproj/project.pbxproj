@@ -16,6 +16,8 @@
 		3487723A0C2E42C4A7920D6C /* CloudMetadataSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458582641789438F86507D16 /* CloudMetadataSyncService.swift */; };
 		38680D1669F24DCDA2E3EB14 /* AllCommentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BD34C5471224F2D85D81C74 /* AllCommentsView.swift */; };
 		3B468FECA83B4F62DC84BDBF /* TaskFlowWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A7A394FE855E941AC6D863E /* TaskFlowWidgets.swift */; };
+		44F9B995F6FB63F555B8F70D /* TaskFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 138BDA123D91AD87FE16BA6A /* TaskFlowUITests.swift */; };
+		47781C57A4982745AFD72A79 /* TaskFlowMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13F4D304158E5BD9D32D2904 /* TaskFlowMetrics.swift */; };
 		49E50590082621B22FDB01B2 /* ListTypeExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE465B6BCA6647C1883285B2 /* ListTypeExperience.swift */; };
 		5C82CA68B317B9110F17225A /* TaskModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01F45EAF312B54645E7D9463 /* TaskModels.swift */; };
 		5D8E317ED37BE72E8328CE98 /* NotificationScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8A0EC4D2153F8B95D6E67CB /* NotificationScheduler.swift */; };
@@ -37,17 +39,25 @@
 		CE7F392DAA81205765101382 /* TaskDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4207A810815D2DD9930E639 /* TaskDetailView.swift */; };
 		D3B7850F631F4C22AE3D66E1 /* DueTodayLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E83E9F5B93B8478DB3F66095 /* DueTodayLiveActivityCoordinator.swift */; };
 		D91000000000000000000001 /* ReadingMedia.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE8CFFBCCD3AB0D48416647D /* ReadingMedia.swift */; };
+		DA7904A56F1E783416648808 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8B0C73A32CBD09EEBB9C7712 /* Foundation.framework */; };
 		DB77AA8FC562BFA70C376D0F /* TaskEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DF62AF29E584C12CBC4E92B /* TaskEditorView.swift */; };
 		DD10A98FC46BD2A98FACD153 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7F331F12244E96ED1AEA1DF1 /* Foundation.framework */; };
 		DFC29528C498CA94D23087FF /* TaskFlowDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E48D7AD6B2C2376340A2ED /* TaskFlowDesignSystem.swift */; };
 		E56F70FEA84522BA9A78E8B0 /* TaskRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BCF9799CD8DC4ED42F3D2BC /* TaskRepository.swift */; };
-		E71000000000000000000001 /* Services/CloudNotesSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E71000000000000000000002 /* Services/CloudNotesSyncService.swift */; };
+		E71000000000000000000001 /* CloudNotesSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E71000000000000000000002 /* CloudNotesSyncService.swift */; };
 		E7844E1A585D76FC3463C776 /* TaskCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D2DB6E99B573A68C473335 /* TaskCollectionView.swift */; };
 		E89C3ED341A87C31D44A44D7 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9F79791C4AF949F91E90E0 /* SettingsView.swift */; };
 		FA44BFE333961BE35BE663FF /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7F331F12244E96ED1AEA1DF1 /* Foundation.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		2E24ABDAC08241449983D888 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 341098EBAF7F4B2D8F6B7787 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C9763BD974A3B659DEFA8D3B;
+			remoteInfo = TaskFlow;
+		};
 		A50154BDCC2A5913D551969C /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 341098EBAF7F4B2D8F6B7787 /* Project object */;
@@ -91,6 +101,8 @@
 		03B39AE0B28AEDAA36363BEC /* MetadataStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MetadataStore.swift; path = Services/MetadataStore.swift; sourceTree = "<group>"; };
 		053008A20F111F66FF733B7C /* TaskFlowApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskFlowApp.swift; sourceTree = "<group>"; };
 		0CB9183405C391CEABE39802 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		138BDA123D91AD87FE16BA6A /* TaskFlowUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskFlowUITests.swift; sourceTree = "<group>"; };
+		13F4D304158E5BD9D32D2904 /* TaskFlowMetrics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskFlowMetrics.swift; path = Services/TaskFlowMetrics.swift; sourceTree = "<group>"; };
 		3467F562DAF5002E0A3B6711 /* TaskRepositoryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskRepositoryTests.swift; sourceTree = "<group>"; };
 		3BD34C5471224F2D85D81C74 /* AllCommentsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AllCommentsView.swift; path = Views/AllCommentsView.swift; sourceTree = "<group>"; };
 		40A43D37A10F7DC2FF69A512 /* SmartListEditorView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SmartListEditorView.swift; path = Views/SmartListEditorView.swift; sourceTree = "<group>"; };
@@ -101,6 +113,7 @@
 		7F331F12244E96ED1AEA1DF1 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		88BE01236C304755995417BB /* NotificationTapRouter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NotificationTapRouter.swift; path = Services/NotificationTapRouter.swift; sourceTree = "<group>"; };
 		8A7A394FE855E941AC6D863E /* TaskFlowWidgets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskFlowWidgets.swift; sourceTree = "<group>"; };
+		8B0C73A32CBD09EEBB9C7712 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		8DF62AF29E584C12CBC4E92B /* TaskEditorView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskEditorView.swift; path = Views/TaskEditorView.swift; sourceTree = "<group>"; };
 		9083641A404A4D05ACBA9834 /* TaskFlowSharedSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskFlowSharedSettings.swift; path = Shared/TaskFlowSharedSettings.swift; sourceTree = "<group>"; };
 		9BCF9799CD8DC4ED42F3D2BC /* TaskRepository.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskRepository.swift; path = Services/TaskRepository.swift; sourceTree = "<group>"; };
@@ -115,11 +128,12 @@
 		B91210E210BB4E31341BBE8C /* Components.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Components.swift; path = Views/Components.swift; sourceTree = "<group>"; };
 		BE8CFFBCCD3AB0D48416647D /* ReadingMedia.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ReadingMedia.swift; path = TaskFlow/Shared/ReadingMedia.swift; sourceTree = "<group>"; };
 		C4D2DB6E99B573A68C473335 /* TaskCollectionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskCollectionView.swift; path = Views/TaskCollectionView.swift; sourceTree = "<group>"; };
+		C4EFCEC1266EB0021F099C9C /* TaskFlowUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TaskFlowUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC9F79791C4AF949F91E90E0 /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
 		DC4EB8934893B8F19187B881 /* EventKitReminderService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = EventKitReminderService.swift; path = Services/EventKitReminderService.swift; sourceTree = "<group>"; };
 		DE465B6BCA6647C1883285B2 /* ListTypeExperience.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ListTypeExperience.swift; path = TaskFlow/Views/ListTypeExperience.swift; sourceTree = "<group>"; };
 		E4207A810815D2DD9930E639 /* TaskDetailView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskDetailView.swift; path = Views/TaskDetailView.swift; sourceTree = "<group>"; };
-		E71000000000000000000002 /* Services/CloudNotesSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/CloudNotesSyncService.swift; sourceTree = "<group>"; };
+		E71000000000000000000002 /* CloudNotesSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/CloudNotesSyncService.swift; sourceTree = "<group>"; };
 		E83E9F5B93B8478DB3F66095 /* DueTodayLiveActivityCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DueTodayLiveActivityCoordinator.swift; path = Services/DueTodayLiveActivityCoordinator.swift; sourceTree = "<group>"; };
 		E8AF3909FD7847EFA1F2F13B /* TaskFlow.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = TaskFlow.entitlements; sourceTree = "<group>"; };
 		EC21F4A988F3423CB41D98A4 /* TaskFlowWidgets.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = TaskFlowWidgets.entitlements; sourceTree = "<group>"; };
@@ -131,6 +145,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				AE3EA2B375885D09BD3D44AC /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8DC9C9441865957A567BF221 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DA7904A56F1E783416648808 /* Foundation.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -160,10 +182,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		096C71FEE348C9CAB0300FF9 /* TaskFlowUITests */ = {
+			isa = PBXGroup;
+			children = (
+				138BDA123D91AD87FE16BA6A /* TaskFlowUITests.swift */,
+			);
+			name = TaskFlowUITests;
+			path = TaskFlowUITests;
+			sourceTree = "<group>";
+		};
 		0D2DAEEAD015E1B8C018FA8F /* iOS */ = {
 			isa = PBXGroup;
 			children = (
 				7F331F12244E96ED1AEA1DF1 /* Foundation.framework */,
+				8B0C73A32CBD09EEBB9C7712 /* Foundation.framework */,
 			);
 			name = iOS;
 			sourceTree = "<group>";
@@ -191,7 +223,7 @@
 				DC4EB8934893B8F19187B881 /* EventKitReminderService.swift */,
 				03B39AE0B28AEDAA36363BEC /* MetadataStore.swift */,
 				458582641789438F86507D16 /* CloudMetadataSyncService.swift */,
-				E71000000000000000000002 /* Services/CloudNotesSyncService.swift */,
+				E71000000000000000000002 /* CloudNotesSyncService.swift */,
 				A8A0EC4D2153F8B95D6E67CB /* NotificationScheduler.swift */,
 				88BE01236C304755995417BB /* NotificationTapRouter.swift */,
 				E83E9F5B93B8478DB3F66095 /* DueTodayLiveActivityCoordinator.swift */,
@@ -210,6 +242,7 @@
 				E4207A810815D2DD9930E639 /* TaskDetailView.swift */,
 				8DF62AF29E584C12CBC4E92B /* TaskEditorView.swift */,
 				A2E48D7AD6B2C2376340A2ED /* TaskFlowDesignSystem.swift */,
+				13F4D304158E5BD9D32D2904 /* TaskFlowMetrics.swift */,
 			);
 			name = Sources;
 			sourceTree = "<group>";
@@ -237,6 +270,7 @@
 				AF39A2BE1C1917EEA7695C9B /* TaskFlowWidgets.appex */,
 				4ABBA58BAE38417032F1891B /* TaskFlowTests.xctest */,
 				B10000000000000000000006 /* TaskFlowShareExtension.appex */,
+				C4EFCEC1266EB0021F099C9C /* TaskFlowUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -270,6 +304,7 @@
 				9BADBD01A7BBBE648D2DBD69 /* TaskFlowTests */,
 				BE8CFFBCCD3AB0D48416647D /* ReadingMedia.swift */,
 				DE465B6BCA6647C1883285B2 /* ListTypeExperience.swift */,
+				096C71FEE348C9CAB0300FF9 /* TaskFlowUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -310,6 +345,24 @@
 			productName = TaskFlowTests;
 			productReference = 4ABBA58BAE38417032F1891B /* TaskFlowTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		84AF96ACD7CF1F53E575F1F3 /* TaskFlowUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E998F8C00F24BCA310F096F2 /* Build configuration list for PBXNativeTarget "TaskFlowUITests" */;
+			buildPhases = (
+				59A1450032D4469C45D29A5E /* Sources */,
+				8DC9C9441865957A567BF221 /* Frameworks */,
+				16DFE173BC4F6B2AE9D92625 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4DE1135B9D9B6F34EA23BA7C /* PBXTargetDependency */,
+			);
+			name = TaskFlowUITests;
+			productName = TaskFlowUITests;
+			productReference = C4EFCEC1266EB0021F099C9C /* TaskFlowUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 		ACC750A8705607963295EE88 /* TaskFlowWidgets */ = {
 			isa = PBXNativeTarget;
@@ -375,6 +428,12 @@
 				LastSwiftUpdateCheck = 1600;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					84AF96ACD7CF1F53E575F1F3 = {
+						CreatedOnToolsVersion = 26.5;
+						DevelopmentTeam = RUS98YNC4X;
+						ProvisioningStyle = Automatic;
+						TestTargetID = C9763BD974A3B659DEFA8D3B;
+					};
 					ACC750A8705607963295EE88 = {
 						CreatedOnToolsVersion = 26.5;
 						DevelopmentTeam = RUS98YNC4X;
@@ -422,11 +481,19 @@
 				ACC750A8705607963295EE88 /* TaskFlowWidgets */,
 				430FBCC129E7ADAF991D7262 /* TaskFlowTests */,
 				B10000000000000000000010 /* TaskFlowShareExtension */,
+				84AF96ACD7CF1F53E575F1F3 /* TaskFlowUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		16DFE173BC4F6B2AE9D92625 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9C2ED24C6885ED15893110C7 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -459,6 +526,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		59A1450032D4469C45D29A5E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				44F9B995F6FB63F555B8F70D /* TaskFlowUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5AEA518E383E09F20C1719DA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -478,7 +553,7 @@
 				2F96966919DA675621AA2BFE /* EventKitReminderService.swift in Sources */,
 				777EBB703E4295030C6EBBE3 /* MetadataStore.swift in Sources */,
 				3487723A0C2E42C4A7920D6C /* CloudMetadataSyncService.swift in Sources */,
-				E71000000000000000000001 /* Services/CloudNotesSyncService.swift in Sources */,
+				E71000000000000000000001 /* CloudNotesSyncService.swift in Sources */,
 				5D8E317ED37BE72E8328CE98 /* NotificationScheduler.swift in Sources */,
 				8F2EB5C2085F432FA8371066 /* NotificationTapRouter.swift in Sources */,
 				D3B7850F631F4C22AE3D66E1 /* DueTodayLiveActivityCoordinator.swift in Sources */,
@@ -499,6 +574,7 @@
 				DFC29528C498CA94D23087FF /* TaskFlowDesignSystem.swift in Sources */,
 				6AFD279D6BF9B004EE22A75C /* ReadingMedia.swift in Sources */,
 				49E50590082621B22FDB01B2 /* ListTypeExperience.swift in Sources */,
+				47781C57A4982745AFD72A79 /* TaskFlowMetrics.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -527,6 +603,12 @@
 			name = TaskFlow;
 			target = C9763BD974A3B659DEFA8D3B /* TaskFlow */;
 			targetProxy = C90EE499FB874E117F999A21 /* PBXContainerItemProxy */;
+		};
+		4DE1135B9D9B6F34EA23BA7C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = TaskFlow;
+			target = C9763BD974A3B659DEFA8D3B /* TaskFlow */;
+			targetProxy = 2E24ABDAC08241449983D888 /* PBXContainerItemProxy */;
 		};
 		8D8E1F2DC513272A868CE9BC /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -656,6 +738,7 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = targeted;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
@@ -686,6 +769,26 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
+		};
+		4583F5F610E34AA1B71FAC01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = RUS98YNC4X;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.09;
+				PRODUCT_BUNDLE_IDENTIFIER = com.surratt.TaskFlowUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TaskFlow;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
 		};
 		4892E21E4F8918475343FD1B /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -840,8 +943,28 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = targeted;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FE3A02096BC528C27DD827D3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = RUS98YNC4X;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.09;
+				PRODUCT_BUNDLE_IDENTIFIER = com.surratt.TaskFlowUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TaskFlow;
 			};
 			name = Debug;
 		};
@@ -907,6 +1030,15 @@
 			buildConfigurations = (
 				96E82A2ABBBD2A7B5DC690E8 /* Debug */,
 				026E9E556E3AFD49FB106D11 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E998F8C00F24BCA310F096F2 /* Build configuration list for PBXNativeTarget "TaskFlowUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4583F5F610E34AA1B71FAC01 /* Release */,
+				FE3A02096BC528C27DD827D3 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

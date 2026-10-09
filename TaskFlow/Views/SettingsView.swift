@@ -298,6 +298,9 @@ struct SettingsView: View {
                     Text("Shared videos default to Watch Later; articles and other links default to Read Later. Choose any Reading & Watch Later list. Links are kept safely until TaskFlow opens and imports them.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section {
+                    NavigationLink { DiagnosticsView() } label: { Label("Diagnostics", systemImage: "stethoscope") }
+                } footer: { Text("Launch time, hangs, and crashes reported by iOS on this device.") }
                         }
                         .taskFlowThemedBackground()
                         .navigationTitle("Sync & Data")
@@ -726,5 +729,52 @@ struct GuidedSetupView: View {
                 }
             }
         }.navigationTitle("Set Up TaskFlow")
+    }
+}
+
+
+/// MetricKit's daily reports for this device: launch time against the 400 ms goal, hangs, and crashes.
+struct DiagnosticsView: View {
+    @State private var days: [DiagnosticsDay] = []
+    @State private var files: [URL] = []
+
+    var body: some View {
+        Form {
+            if days.isEmpty {
+                ContentUnavailableView("No Reports Yet", systemImage: "stethoscope",
+                                       description: Text("iOS delivers performance reports about once a day after you use TaskFlow. Check back tomorrow."))
+            } else {
+                Section {
+                    ForEach(days) { day in
+                        VStack(alignment: .leading, spacing: TaskFlowTheme.Spacing.xSmall) {
+                            Text(day.date.formatted(date: .abbreviated, time: .omitted)).font(.headline)
+                            if let launch = day.launchMilliseconds {
+                                Label("Launch \(Int(launch.rounded())) ms", systemImage: launch <= TaskFlowMetrics.launchGoalMilliseconds ? "bolt.fill" : "tortoise.fill")
+                                    .foregroundStyle(launch <= TaskFlowMetrics.launchGoalMilliseconds ? TaskFlowTheme.success : TaskFlowTheme.warning)
+                            }
+                            HStack(spacing: TaskFlowTheme.Spacing.large) {
+                                Label("\(day.hangCount) hangs", systemImage: "hourglass").foregroundStyle(day.hangCount == 0 ? Color.secondary : TaskFlowTheme.warning)
+                                Label("\(day.crashCount) crashes", systemImage: "exclamationmark.octagon").foregroundStyle(day.crashCount == 0 ? Color.secondary : TaskFlowTheme.overdue)
+                            }
+                            .font(.subheadline)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                } header: { Text("Last 30 Days") } footer: {
+                    Text("Goal: launch under \(Int(TaskFlowMetrics.launchGoalMilliseconds)) ms with no hangs or crashes.")
+                }
+            }
+            if !files.isEmpty {
+                Section {
+                    ShareLink(items: files) { Label("Share Detailed Reports", systemImage: "square.and.arrow.up") }
+                } footer: { Text("Reports stay on this device unless you share them. They contain no tasks, notes, or personal content.") }
+            }
+        }
+        .taskFlowThemedBackground()
+        .navigationTitle("Diagnostics")
+        .onAppear {
+            days = TaskFlowMetrics.shared.recentDays()
+            files = TaskFlowMetrics.shared.exportFiles()
+        }
     }
 }
