@@ -29,6 +29,15 @@ final class NotificationScheduler {
         var date: Date
         /// Also alert this many days before; 0 for only the day itself.
         var leadDays: Int = 3
+        var customBody: String? = nil
+        var hour: Int = 9
+        var minute: Int = 0
+        var exactFireDate: Date? = nil
+        var playsSound: Bool = true
+        var episodeShowID: Int? = nil
+        var episodeID: Int? = nil
+        var episodeLabel: String? = nil
+        var episodeRelease: Date? = nil
     }
 
     private let center = UNUserNotificationCenter.current()
@@ -81,7 +90,7 @@ final class NotificationScheduler {
         let requests = await center.pendingNotificationRequests()
         let identifiers = requests
             .map(\.identifier)
-            .filter { $0.hasPrefix(identifierPrefix) }
+            .filter { $0.hasPrefix(identifierPrefix) || $0.hasPrefix(EpisodeNotificationActions.snoozePrefix) }
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
@@ -100,13 +109,16 @@ final class NotificationScheduler {
         lastSchedulingError = nil
         let existing = await center.pendingNotificationRequests()
         let owned = existing.filter { $0.identifier.hasPrefix(identifierPrefix) }
+        let snoozed = existing.filter { $0.identifier.hasPrefix(EpisodeNotificationActions.snoozePrefix) }
+        let activeSnoozes = Self.activeEpisodeSnoozeIDs(snoozed, deadlines: deadlines)
+        center.removePendingNotificationRequests(withIdentifiers: snoozed.filter { !activeSnoozes.contains($0.identifier) }.map(\.identifier))
         guard enabled, (await authorizationStatus()).canSchedule else {
-            center.removePendingNotificationRequests(withIdentifiers: owned.map(\.identifier))
+            center.removePendingNotificationRequests(withIdentifiers: owned.map(\.identifier) + snoozed.map(\.identifier))
             return
         }
 
         // Leave room for notifications owned by other app features.
-        let available = max(0, 64 - existing.filter { !$0.identifier.hasPrefix(identifierPrefix) }.count)
+        let available = max(0, 64 - existing.filter { !$0.identifier.hasPrefix(identifierPrefix) && (!$0.identifier.hasPrefix(EpisodeNotificationActions.snoozePrefix) || activeSnoozes.contains($0.identifier)) }.count)
         let now = Date()
         let inputs = tasks.filter { !$0.isCompleted }.map(Input.init)
         let zone = TimeZone.current
@@ -129,6 +141,14 @@ final class NotificationScheduler {
         }
     }
 
+    static func activeEpisodeSnoozeIDs(_ requests: [UNNotificationRequest], deadlines: [DeadlineAlert]) -> Set<String> {
+        Set(requests.filter { request in
+            deadlines.contains { alert in
+                guard let showID = alert.episodeShowID, let episodeID = alert.episodeID else { return false }
+                return EpisodeNotificationActions.matches(request.content, taskID: alert.taskID, showID: showID, episodeID: episodeID)
+            }
+        }.map(\.identifier))
+    }
     private(set) var lastSchedulingError: String?
 
     /// Stable IDs and absolute triggers let edits replace alerts without deleting unrelated requests.
@@ -171,19 +191,26 @@ final class NotificationScheduler {
         }
         for deadline in deadlines {
             guard deadline.date.timeIntervalSince1970.isFinite,
-                  let day = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: deadline.date) else { continue }
+                  let day = calendar.date(bySettingHour: max(0, min(23, deadline.hour)), minute: max(0, min(59, deadline.minute)), second: 0, of: deadline.date) else { continue }
             let slug = deadline.label.lowercased().replacingOccurrences(of: " ", with: "-")
             for lead in Set([0, max(0, min(deadline.leadDays, 30))]).sorted() {
-                guard let date = calendar.date(byAdding: .day, value: -lead, to: day), date > now,
+                guard let date = deadline.exactFireDate ?? calendar.date(byAdding: .day, value: -lead, to: day), date > now,
                       let timestamp = Int(exactly: date.timeIntervalSince1970.rounded(.towardZero)) else { continue }
                 let identifier = "taskflow-due-" + deadline.taskID + "-" + slug + "-" + String(timestamp)
                 guard seen.insert(identifier).inserted else { continue }
                 let content = UNMutableNotificationContent()
-                content.title = deadline.label + (lead == 0 ? " Today" : " in \(lead) Days")
-                content.body = deadline.taskTitle + " · " + deadline.date.formatted(date: .abbreviated, time: .omitted)
-                content.sound = .default
+                content.title = deadline.label + (deadline.exactFireDate != nil ? " Reminder" : (lead == 0 ? " Today" : " in \(lead) Days"))
+                content.body = deadline.customBody ?? (deadline.taskTitle + " · " + deadline.date.formatted(date: .abbreviated, time: .omitted))
+                content.sound = deadline.playsSound ? .default : nil
                 content.threadIdentifier = deadline.listID
                 content.userInfo = [TaskFlowNotificationPayload.taskIDKey: deadline.taskID, TaskFlowNotificationPayload.listIDKey: deadline.listID]
+                if let showID = deadline.episodeShowID, let episodeID = deadline.episodeID {
+                    content.categoryIdentifier = deadline.episodeRelease.map { $0 <= date } == true ? EpisodeNotificationActions.category : EpisodeNotificationActions.upcomingCategory
+                    content.userInfo[EpisodeNotificationActions.showKey] = showID
+                    content.userInfo[EpisodeNotificationActions.episodeKey] = episodeID
+                    content.userInfo[EpisodeNotificationActions.labelKey] = deadline.episodeLabel ?? "Episode"
+                    content.userInfo[EpisodeNotificationActions.titleKey] = deadline.taskTitle
+                }
                 var components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
                 components.timeZone = calendar.timeZone
                 candidates.append((date, UNNotificationRequest(identifier: identifier, content: content,

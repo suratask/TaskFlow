@@ -241,6 +241,7 @@ struct AllNotesView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if let url = TaskFlowWebNotesConfiguration.websiteURL { Link("Open Notes in Browser", destination: url) }
                     if let undo = repository.noteUndo { Button("Undo " + undo.message, systemImage: "arrow.uturn.backward") { repository.restoreNote(undo) }.keyboardShortcut("z", modifiers: .command) }
                     if let redo = repository.noteRedo { Button("Redo " + redo.message, systemImage: "arrow.uturn.forward") { repository.restoreNote(redo, isRedo: true) }.keyboardShortcut("z", modifiers: [.command, .shift]) }
                 } label: { Label("More", systemImage: "ellipsis") }
@@ -431,18 +432,19 @@ private struct QuickNoteEditorView: View {
     @State private var didHandleInitialDictation = false
     @State private var drawingUndoToken = 0
     @State private var drawingClearToken = 0
-    @FocusState private var isTextFocused: Bool
+    @State private var isTextFocused = false
+    @State private var formattingCommand: NoteFormattingCommand?
 
     init(repository: TaskRepository, draft: QuickNoteEditorDraft) {
         self.repository = repository
         self.draft = draft
         _folder = State(initialValue: draft.seed?.folder ?? "")
         _title = State(initialValue: draft.seed?.title ?? "")
-        _text = State(initialValue: draft.seed?.text ?? "")
+        _text = State(initialValue: NoteRichText.legacyText(draft.seed?.text ?? "", format: draft.seed?.format ?? .plain))
         _selectedTags = State(initialValue: draft.seed?.tags ?? [])
         _linkedTaskID = State(initialValue: draft.seed?.linkedTaskID)
         _linkedEventID = State(initialValue: draft.seed?.linkedEventID)
-        _format = State(initialValue: draft.seed?.format ?? .plain)
+        _format = State(initialValue: .markdown)
         _layout = State(initialValue: draft.seed?.layout ?? .standard)
         _drawingData = State(initialValue: draft.seed?.drawingData)
         _attachments = State(initialValue: draft.seed?.attachments ?? [])
@@ -456,14 +458,10 @@ private struct QuickNoteEditorView: View {
                     TextField("Title", text: $title)
                         .font(.headline)
 
-                    if format == .checklist {
-                        NoteChecklistEditor(text: $text, color: repository.appTheme.primary, onCreateTask: convertItemToTask)
-                    } else {
-                        TextField("Write a quick note", text: $text, axis: .vertical)
-                            .lineLimit(8...18)
-                            .focused($isTextFocused)
-                    }
+                    NoteFormattingTextEditor(text: $text, command: $formattingCommand, focused: $isTextFocused)
+                        .frame(height: 260)
 
+                    QuickNoteFormattingToolbar(format: $format, text: $text, command: $formattingCommand)
                     Button("Dictate Note", systemImage: "mic") {
                         isTextFocused = false
                         isDictationPresented = true
@@ -550,17 +548,7 @@ private struct QuickNoteEditorView: View {
                     }
                 }
 
-                Section("Format") {
-                    Picker("Format", selection: $format) {
-                        ForEach(QuickNoteFormat.allCases) { option in
-                            Label(option.title, systemImage: option.icon)
-                                .tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
 
-                    QuickNoteFormattingToolbar(format: $format, text: $text)
-                }
 
                 Section("Layout") {
                     Picker("Layout", selection: $layout) {
@@ -616,19 +604,11 @@ private struct QuickNoteEditorView: View {
                         }
                     )
 
-                    QuickNoteAttachmentPicker(
-                        title: "Event",
-                        icon: "calendar",
-                        selectionTitle: linkedEventTitle,
-                        onClear: { linkedEventID = nil },
-                        content: {
-                            ForEach(attachableEvents) { event in
-                                Button(event.title) {
-                                    linkedEventID = event.id
-                                }
-                            }
-                        }
-                    )
+                    NavigationLink {
+                        EventLinkPicker(repository: repository, selection: Binding(get: { linkedEventID ?? "" }, set: { linkedEventID = $0.isEmpty ? nil : $0 }))
+                    } label: {
+                        LabeledContent { Text(linkedEventTitle) } label: { Label("Event", systemImage: "calendar") }
+                    }
                 }
             }
             .taskFlowThemedBackground()
@@ -979,73 +959,60 @@ private struct QuickNoteDrawingThumbnail: View {
     }
 }
 
-private struct QuickNoteFormattingToolbar: View {
+struct QuickNoteFormattingToolbar: View {
     @Binding var format: QuickNoteFormat
     @Binding var text: String
+    @Binding var command: NoteFormattingCommand?
+
+    @State private var showingLink = false
+    @State private var linkURL = "https://"
 
     var body: some View {
-        HStack(spacing: 10) {
+        ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
+            formattingButton("bold", title: "Bold") { inline("**", closing: "**", placeholder: "bold text") }
+            formattingButton("italic", title: "Italic") { inline("*", closing: "*", placeholder: "italic text") }
+            formattingButton("text.alignleft", title: "Normal Text") { inline("", placeholder: "", wholeLine: true) }
             formattingButton("list.bullet", title: "Bullets") {
-                format = .bullets
-                applyPrefix("- ")
+                inline("- ", placeholder: "", wholeLine: true)
             }
             formattingButton("checklist", title: "Checklist") {
-                format = .checklist
-                applyPrefix("- [ ] ")
+                inline("- [ ] ", placeholder: "", wholeLine: true)
             }
             formattingButton("quote.opening", title: "Quote") {
-                format = .quote
-                applyPrefix("> ")
+                inline("> ", placeholder: "", wholeLine: true)
             }
-            Menu("Rich Text", systemImage: "textformat") {
-                Button("Add Heading") { insertRich("# Heading") }
-                Button("Add Bold Text") { insertRich("**bold text**") }
-                Button("Add Link") { insertRich("[link text](https://example.com)") }
-                Button("Add Checklist Item") { insertRich("- [ ] Checklist item") }
-                Button("Add Nested Checklist Item") { insertRich("  - [ ] Nested item") }
-            }
+            formattingButton("textformat.size", title: "Heading") { inline("# ", placeholder: "Heading", wholeLine: true) }
+            formattingButton("list.number", title: "Numbered") { inline("1. ", placeholder: "Item", wholeLine: true) }
+            formattingButton("link", title: "Link") { showingLink = true }
             Spacer(minLength: 0)
+        }
         }
         .padding(.vertical, 4)
         .foregroundStyle(.secondary)
-        .onChange(of: format) { _, newValue in
-            applyFormat(newValue)
-        }
+        .alert("Insert Link", isPresented: $showingLink) {
+            TextField("https://example.com", text: $linkURL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Insert") {
+                inline("[", closing: "](" + linkURL.trimmingCharacters(in: .whitespacesAndNewlines) + ")", placeholder: "link text")
+                linkURL = "https://"
+            }.disabled(URL(string: linkURL.trimmingCharacters(in: .whitespacesAndNewlines)).map(ReadingMedia.isWebURL) != true)
+            Button("Cancel", role: .cancel) { }
+        } message: { Text("Enter a web address. Selected text becomes the link label.") }
+
+    }
+
+    private func inline(_ opening: String, closing: String = "", placeholder: String, wholeLine: Bool = false) {
+        format = .markdown
+        command = NoteFormattingCommand(opening: opening, closing: closing, placeholder: placeholder, wholeLine: wholeLine)
     }
 
     private func formattingButton(_ icon: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.headline.weight(.semibold))
-                .frame(width: 38, height: 34)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-    }
-
-    private func applyFormat(_ format: QuickNoteFormat) {
-        switch format {
-        case .plain:
-            break
-        case .bullets:
-            applyPrefix("- ")
-        case .checklist:
-            applyPrefix("- [ ] ")
-        case .quote:
-            applyPrefix("> ")
-        case .markdown:
-            break
-        }
-    }
-
-    private func insertRich(_ value: String) {
-        format = .markdown
-        text += (text.isEmpty ? "" : "\n") + value
-    }
-
-    private func applyPrefix(_ prefix: String) {
-        text = NoteChecklist.formatted(text, prefix: prefix)
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 10).frame(minHeight: 44)
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+        }.buttonStyle(.plain).accessibilityLabel(title)
     }
 
 }
@@ -2139,6 +2106,16 @@ private struct NoteDocumentLineView: View {
                     HStack { Text(styledText).font(line.headingLevel == 1 ? .title2.bold() : .headline); Spacer(); Image(systemName: isCollapsed ? "chevron.right" : "chevron.down") }
                 }.buttonStyle(.plain).padding(.vertical, 4)
             } else { Text(styledText).font(line.headingLevel == 1 ? .title2.bold() : .headline).padding(.vertical, 4) }
+        } else if line.source.hasPrefix("- ") || line.source.hasPrefix("* ") {
+            HStack(alignment: .top, spacing: 8) {
+                Text("•")
+                Text(NoteTextFormatting.inline(String(line.source.dropFirst(2))))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if line.source.hasPrefix("> ") {
+            Text(NoteTextFormatting.inline(String(line.source.dropFirst(2))))
+                .italic().padding(.leading, 12)
+                .overlay(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
         } else {
             Text(styledText).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
         }

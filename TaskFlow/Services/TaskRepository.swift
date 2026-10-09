@@ -1,8 +1,11 @@
 import Foundation
+import UserNotifications
 import EventKit
 import Observation
 import SwiftUI
 import WidgetKit
+import LinkPresentation
+import UIKit
 
 @MainActor
 @Observable
@@ -190,6 +193,7 @@ final class TaskRepository {
         guard listProfile(id) != profile else { return }
         listProfiles[id] = profile
         metadataStore.listProfiles = listProfiles
+        publishReadingDestinations()
     }
     func specializedDetails(_ task: TaskItem) -> SpecializedTaskDetails {
         currentTask(id: task.id)?.sharedShoppingDetails ?? task.sharedShoppingDetails ?? specializedTasks[task.metadataID] ?? specializedTasks[task.id] ?? SpecializedTaskDetails()
@@ -213,9 +217,9 @@ final class TaskRepository {
         guard !isUndoing else { return false }
         let current = currentTask(id: task.id) ?? task
         let previous = specializedDetails(current)
-        guard previous != details else { return true }
         let stage = details.fields[type == .reading ? "Progress" : "Stage"] ?? ""
         let completionChanged = type.stages.contains(stage) && current.isCompleted != ["Paid", "Canceled", "Packed", "Finished"].contains(stage)
+        guard previous != details || completionChanged else { return true }
         do {
             if type == .shopping {
                 _ = try reminderService.saveTask(TaskDraft(task: current), metadataStore: metadataStore, shoppingDetails: details)
@@ -235,11 +239,58 @@ final class TaskRepository {
             if completionChanged {
                 await refreshTasks()
                 await rescheduleNotifications()
-            } else if type == .bills {
+            } else if type == .bills || type == .reading {
                 await rescheduleNotifications() // Deadline dates feed reminders.
             }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    /// Applies a single field to selected items and records all successful changes in one Undo.
+    /// Failed items remain selected in the editor and can be retried independently.
+    func bulkUpdateListDetails(ids: Set<String>, listID: String, field: String, value: String) async -> Set<String> {
+        let type = listProfile(listID).type
+        guard !isUndoing, type.bulkFields.contains(field),
+              field != type.stageField || type.stages.contains(value) else { return [] }
+        let selected = tasks.filter { ids.contains($0.id) && $0.listID == listID && $0.parentID == nil }
+        var previous: [TaskItem] = []
+        var snapshots: [String: SpecializedTaskDetails] = [:]
+        var applied: Set<String> = []
+        var completionChanged = false
+        var failures = 0
+        for item in selected {
+            let old = specializedDetails(item)
+            var updated = old
+            if value.isEmpty { updated.fields.removeValue(forKey: field) }
+            else { updated.fields[field] = value }
+            guard updated != old else { applied.insert(item.id); continue }
+            do {
+                if type == .shopping {
+                    _ = try reminderService.saveTask(TaskDraft(task: item), metadataStore: metadataStore, shoppingDetails: updated)
+                    taskFetchGeneration &+= 1
+                    taskRefresh = nil
+                }
+                if field == type.stageField, !type.stages.isEmpty {
+                    let complete = ["Paid", "Canceled", "Packed", "Finished"].contains(value)
+                    if item.isCompleted != complete {
+                        try reminderService.setCompleted(complete, task: item, metadataStore: metadataStore)
+                        completionChanged = true
+                    }
+                }
+                setSpecializedDetails(updated, for: item)
+                if type == .shopping, let index = tasks.firstIndex(where: { $0.id == item.id }) { tasks[index].sharedShoppingDetails = updated }
+                previous.append(item)
+                snapshots[item.id] = old
+                applied.insert(item.id)
+            } catch { failures += 1; errorMessage = error.localizedDescription }
+        }
+        if !previous.isEmpty {
+            offerUndo("Update \(previous.count) Items", previous: previous)
+            taskUndo?.specializedPrevious = snapshots
+        }
+        if completionChanged { await refreshTasks(); await rescheduleNotifications() }
+        if failures > 0 { errorMessage = "Updated \(applied.count) items. \(failures) could not be updated. " + (errorMessage ?? "Please retry.") }
+        return applied
     }
 
     func updateListTemplate(_ template: SpecializedListTemplate) {
@@ -308,7 +359,8 @@ final class TaskRepository {
                 details.fields["Run ID"] = runID
                 createdAny = true
                 createdIDs.append(id)
-                specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = details
+                rememberStreamingServices(details.fields)
+            specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = details
                 metadataStore.specializedTasks = specializedTasks
             } catch { errorMessage = error.localizedDescription; break }
         }
@@ -528,7 +580,7 @@ final class TaskRepository {
     }
 
     var listIcons: [String: String] = [:]
-    static let listIconChoices = ["list.bullet", "briefcase", "house", "cart", "heart", "pills", "book", "person.2", "airplane", "graduationcap", "star", "folder", "wrench.and.screwdriver", "leaf", "music.note", "sportscourt"]
+    static let listIconChoices = ["list.bullet", "briefcase", "house", "cart", "heart", "pills", "book", "person.2", "airplane", "graduationcap", "star", "folder", "wrench.and.screwdriver", "leaf", "music.note", "sportscourt", "film", "tv", "headphones", "bookmark", "newspaper", "bag", "basket", "fork.knife", "cup.and.saucer", "gift", "pawprint", "car", "bicycle", "tram", "map", "tent", "sun.max", "moon", "cloud", "camera", "paintbrush", "gamecontroller", "laptopcomputer", "hammer", "building.2", "dollarsign.circle", "creditcard", "banknote", "calendar", "clock", "checkmark.seal", "lightbulb", "brain.head.profile", "figure.walk", "figure.run", "dumbbell", "cross.case", "stethoscope", "waterbottle", "drop", "flame", "globe", "shippingbox", "pencil", "note.text", "doc.text", "tray", "flag", "bolt", "sparkles"]
 
     func listIcon(for id: String) -> String { listIcons[id] ?? "list.bullet" }
 
@@ -537,6 +589,113 @@ final class TaskRepository {
         listIcons[id] = icon
         preferences.set(listIcons, forKey: "TaskFlow.listIcons")
         scheduleCloudSync()
+    }
+
+    static func orderedLists(_ lists: [TaskList], order: [String]) -> [TaskList] {
+        let unique = order.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let ranks = Dictionary(unique.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        return lists.enumerated().sorted {
+            let left = ranks[$0.element.id] ?? Int.max, right = ranks[$1.element.id] ?? Int.max
+            return left == right ? $0.offset < $1.offset : left < right
+        }.map(\.element)
+    }
+
+    func moveLists(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var reordered = lists
+        reordered.move(fromOffsets: offsets, toOffset: destination)
+        let hidden = (preferences.stringArray(forKey: "TaskFlow.listOrder") ?? []).filter { id in !reordered.contains { $0.id == id } }
+        preferences.set(reordered.map(\.id) + hidden, forKey: "TaskFlow.listOrder")
+        lists = reordered
+        scheduleCloudSync()
+    }
+
+    func canAddDependency(_ candidate: TaskItem, to task: TaskItem) -> Bool {
+        candidate.id != task.id && !candidate.isCompleted && !dependencyChain(for: candidate).contains { $0.id == task.id }
+    }
+
+    func setDependency(_ candidate: TaskItem, for task: TaskItem, enabled: Bool) async -> Bool {
+        guard let current = currentTask(id: task.id), let candidate = currentTask(id: candidate.id) else { return false }
+        if enabled, !canAddDependency(candidate, to: current) { errorMessage = "This dependency would create a cycle."; return false }
+        var draft = TaskDraft(task: current)
+        draft.blockedByTaskIDs.removeAll { $0 == candidate.id }
+        if enabled { draft.blockedByTaskIDs.append(candidate.id) }
+        return await saveTask(draft)
+    }
+
+    private var todaySectionRevision = 0
+    var todaySectionOrder: [TodayDashboardSection] {
+        _ = todaySectionRevision
+        return TodayDashboardSection.normalized(preferences.stringArray(forKey: "TaskFlow.todaySectionOrder") ?? [])
+    }
+    var visibleTodaySections: [TodayDashboardSection] {
+        _ = todaySectionRevision
+        let hidden = Set(preferences.stringArray(forKey: "TaskFlow.todayHiddenSections") ?? [TodayDashboardSection.timeline.rawValue])
+        return todaySectionOrder.filter { !hidden.contains($0.rawValue) }
+    }
+    func setTodaySectionVisible(_ section: TodayDashboardSection, _ visible: Bool) {
+        var hidden = Set(preferences.stringArray(forKey: "TaskFlow.todayHiddenSections") ?? [TodayDashboardSection.timeline.rawValue])
+        if visible { hidden.remove(section.rawValue) } else { hidden.insert(section.rawValue) }
+        preferences.set(hidden.sorted(), forKey: "TaskFlow.todayHiddenSections")
+        todaySectionRevision &+= 1
+        scheduleCloudSync()
+    }
+    func moveTodaySections(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var order = todaySectionOrder
+        order.move(fromOffsets: offsets, toOffset: destination)
+        preferences.set(order.map(\.rawValue), forKey: "TaskFlow.todaySectionOrder")
+        todaySectionRevision &+= 1
+        scheduleCloudSync()
+    }
+    func resetTodaySections() {
+        preferences.removeObject(forKey: "TaskFlow.todaySectionOrder")
+        preferences.removeObject(forKey: "TaskFlow.todayHiddenSections")
+        todaySectionRevision &+= 1
+        scheduleCloudSync()
+    }
+    func isActionableToday(_ task: TaskItem) -> Bool {
+        !task.isCompleted && task.status != .blocked && task.status != .waiting
+            && !task.blockedByTaskIDs.contains { id in tasks.first { $0.id == id }?.isCompleted != true }
+    }
+    func waitingOnDescription(_ task: TaskItem) -> String? {
+        let blockers = task.blockedByTaskIDs.compactMap { id -> String? in
+            guard let blocker = tasks.first(where: { $0.id == id }) else { return "Unavailable task" }
+            return blocker.isCompleted ? nil : blocker.title
+        }
+        if !blockers.isEmpty {
+            return "Waiting On: " + blockers.prefix(2).joined(separator: ", ") + (blockers.count > 2 ? " (+\(blockers.count - 2))" : "")
+        }
+        return task.status == .blocked || task.status == .waiting ? "Waiting On: Not specified" : nil
+    }
+
+    private var todayPlanningRevision = 0
+    var todayPriorityIDs: [String] {
+        _ = todayPlanningRevision
+        guard preferences.string(forKey: "TaskFlow.todayPriorityDay") == TodayPlanning.dayKey(Date()) else { return [] }
+        let known = Set(tasks.map(\.metadataID))
+        return Array((preferences.stringArray(forKey: "TaskFlow.todayPriorityIDs") ?? []).filter { known.contains($0) }.prefix(3))
+    }
+    var todayPriorityTasks: [TaskItem] {
+        todayPriorityIDs.compactMap { id in tasks.first { $0.metadataID == id } }
+    }
+    func isTodayPriority(_ task: TaskItem) -> Bool { todayPriorityIDs.contains(task.metadataID) }
+    func toggleTodayPriority(_ task: TaskItem) {
+        var ids = todayPriorityIDs
+        if ids.contains(task.metadataID) { ids.removeAll { $0 == task.metadataID } }
+        else {
+            guard ids.count < 3 else { errorMessage = "Choose up to three priorities. Remove one before adding another."; return }
+            ids.append(task.metadataID)
+        }
+        persistTodayPriorities(ids)
+    }
+    func moveTodayPriorities(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var ids = todayPriorityIDs
+        ids.move(fromOffsets: offsets, toOffset: destination)
+        persistTodayPriorities(ids)
+    }
+    private func persistTodayPriorities(_ ids: [String]) {
+        preferences.set(TodayPlanning.dayKey(Date()), forKey: "TaskFlow.todayPriorityDay")
+        preferences.set(ids, forKey: "TaskFlow.todayPriorityIDs")
+        todayPlanningRevision &+= 1
     }
 
     var lists: [TaskList] = [] { didSet { taskFilterRevision &+= 1 } }
@@ -645,7 +804,8 @@ final class TaskRepository {
     private static let syncedPreferenceKeys = [
         "TaskFlow.appTheme", "TaskFlow.appearanceMode", "TaskFlow.taskDensity",
         "TaskFlow.taskViewMode", "TaskFlow.taskGroupOption", "TaskFlow.taskSortOption",
-        "TaskFlow.taskSortDirection", "TaskFlow.listIcons", "TaskFlow.includeCompletedTasks",
+        "TaskFlow.todaySectionOrder", "TaskFlow.todayHiddenSections",
+        "TaskFlow.taskSortDirection", "TaskFlow.listIcons", "TaskFlow.listOrder", "TaskFlow.includeCompletedTasks",
         "TaskFlow.dueFilter", "TaskFlow.quickDueFilter", "TaskFlow.quickStatusFilter",
         "TaskFlow.quickPriorityFilter", "TaskFlow.selectedTagFilter", "TaskFlow.quickTagFilter",
         "TaskFlow.calendar.workspace", "TaskFlow.calendar.savedContexts", "TaskFlow.excludedAvailabilityCalendarIDs"
@@ -713,6 +873,7 @@ final class TaskRepository {
             let settingsChanged = !Self.equivalentSyncedSettings(merged.syncedSettings, metadataStore.currentSnapshot().syncedSettings)
             isApplyingCloudSnapshot = true
             if metadataChanged { metadataStore.replace(with: merged) }
+            guard metadataStore.persistenceError == nil else { throw CocoaError(.fileWriteUnknown) }
             if settingsChanged {
             for key in Self.syncedPreferenceKeys where merged.syncedSettings[key] == nil && merged.fieldUpdatedAt["syncedSettings/" + key] != nil {
                 preferences.removeObject(forKey: key)
@@ -730,6 +891,8 @@ final class TaskRepository {
             taskSortOption = TaskSortOption(rawValue: preferences.string(forKey: "TaskFlow.taskSortOption") ?? "") ?? .dueDate
             taskSortDirection = TaskSortDirection(rawValue: preferences.string(forKey: "TaskFlow.taskSortDirection") ?? "") ?? .ascending
             listIcons = preferences.dictionary(forKey: "TaskFlow.listIcons") as? [String: String] ?? [:]
+            lists = Self.orderedLists(lists, order: preferences.stringArray(forKey: "TaskFlow.listOrder") ?? [])
+            todaySectionRevision &+= 1
             excludedAvailabilityCalendarIDs = Set(preferences.stringArray(forKey: "TaskFlow.excludedAvailabilityCalendarIDs") ?? [])
             includeCompletedTasks = preferences.bool(forKey: "TaskFlow.includeCompletedTasks")
             dueFilter = DueFilter(rawValue: preferences.string(forKey: "TaskFlow.dueFilter") ?? "") ?? .any
@@ -740,6 +903,7 @@ final class TaskRepository {
             quickTagFilter = preferences.data(forKey: "TaskFlow.quickTagFilter").flatMap { try? JSONDecoder().decode(TagFilter.self, from: $0) }
             }
             isApplyingCloudSnapshot = false
+            try await cloudSync.confirmWebNotesSaved()
             // Publish synced links/text before binary downloads; an unavailable
             // photo or document must not hide an already-merged note.
             if metadataChanged { await loadAllData() }
@@ -781,7 +945,7 @@ final class TaskRepository {
     var isFocusFilterActive: Bool { !focusListIDs.isEmpty }
 
     private func visibleLists() -> [TaskList] {
-        let all = reminderService.loadLists()
+        let all = Self.orderedLists(reminderService.loadLists(), order: preferences.stringArray(forKey: "TaskFlow.listOrder") ?? [])
         let allowed = focusListIDs
         guard !allowed.isEmpty else { return all }
         let filtered = all.filter { allowed.contains($0.id) }
@@ -959,8 +1123,14 @@ final class TaskRepository {
             return
         }
         pendingOpenTaskID = nil
-        selectedScope = .list(task.listID)
-        selectedTaskID = id
+        var destination = task
+        var visited: Set<String> = [task.id]
+        while let mergedID = specializedDetails(destination).fields["Merged Into"],
+              let target = currentTask(id: mergedID), visited.insert(target.id).inserted {
+            destination = target
+        }
+        selectedScope = .list(destination.listID)
+        selectedTaskID = destination.id
     }
 
     func consumeWidgetCompletions() async {
@@ -1364,6 +1534,13 @@ final class TaskRepository {
         selectedTaskID = task?.id
     }
 
+    func clearTaskFilters() {
+        clearQuickFilters()
+        selectedTagFilter = nil
+        dueFilter = .any
+        searchQuery = ""
+    }
+
     func clearQuickFilters() {
         quickTagFilter = nil
         quickStatusFilter = nil
@@ -1451,12 +1628,16 @@ final class TaskRepository {
                     try reminderService.restoreDeletedTask(previous, metadataStore: metadataStore)
                 } else {
                     let details = action.specializedPrevious[previous.id] ?? action.specializedPrevious[previous.metadataID] ?? previous.sharedShoppingDetails
-                    _ = try reminderService.saveTask(TaskDraft(task: previous), metadataStore: metadataStore, shoppingDetails: details)
+                    let metadataOnly = action.specializedPrevious[previous.id] != nil && currentTask(id: previous.id) == previous
+                    if !metadataOnly { _ = try reminderService.saveTask(TaskDraft(task: previous), metadataStore: metadataStore, shoppingDetails: details) }
                 }
                 restoredCount += 1
             }
             for id in action.createdTaskIDs { try reminderService.deleteTask(id: id, metadataStore: metadataStore) }
-            for (id, details) in action.specializedPrevious { specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = details }
+            for (id, details) in action.specializedPrevious {
+                let metadataID = action.previous.first { $0.id == id || $0.metadataID == id }?.metadataID ?? reminderService.metadataIdentifier(forReminderID: id)
+                specializedTasks[metadataID] = details
+            }
             if !action.specializedPrevious.isEmpty { metadataStore.specializedTasks = specializedTasks }
             for (id, profile) in action.listProfilesPrevious { setListProfile(profile, for: id) }
             if taskUndo?.id == action.id { taskUndo = nil }
@@ -1482,6 +1663,7 @@ final class TaskRepository {
             let current = currentTask(id: task.id) ?? task
             let previousDetails = specializedDetails(current)
             var updatedDetails = previousDetails
+            updatedDetails.fields = listProfile(current.listID).type.fieldsForCompletion(!current.isCompleted, fields: updatedDetails.fields)
             if !current.isCompleted { updatedDetails.fields["Last Completed"] = SpecializedTaskDetails.dateText(Date()) }
             let shopping = listProfile(current.listID).type == .shopping || current.sharedShoppingDetails != nil
             if shopping {
@@ -1960,13 +2142,23 @@ final class TaskRepository {
         let saved = listProfile(listID).settings["Shopping Stores"].flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
         let existing = tasks.filter { $0.listID == listID }.compactMap { specializedDetails($0).fields["Store"] }
         var unique: [String: String] = [:]
-        for value in saved + existing {
+        for value in saved + existing + [listProfile(listID).settings["Default Store"] ?? ""] {
             let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { continue }
             let key = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             if unique[key] == nil { unique[key] = name }
         }
         return unique.values.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// A selected store filter takes precedence for capture; item editors can override the result.
+    func shoppingCaptureStore(for listID: String) -> String {
+        let settings = listProfile(listID).settings
+        for key in ["Store Filter", "Default Store", "Last Store"] {
+            let value = (settings[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { return value }
+        }
+        return ""
     }
 
     func rememberShoppingStore(_ store: String, for listID: String) {
@@ -1980,21 +2172,152 @@ final class TaskRepository {
         setListProfile(profile, for: listID)
     }
 
-    func addReadingLink(title: String, url: URL, listID: String, metadata: ReadingLinkMetadata? = nil) async -> Bool {
-        guard !isUndoing, ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return false }
-        var draft = TaskDraft(listID: listID)
-        draft.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !draft.title.isEmpty else { return false }
+    func mediaDuplicates(title: String, fields: [String: String], listID: String, excluding id: String? = nil) -> [TaskItem] {
+        tasks.filter { $0.id != id && $0.listID == listID && $0.parentID == nil && specializedDetails($0).fields["Merged Into"] == nil && ReadingMedia.sameTitle(title, fields: fields, $0.title, fields: specializedDetails($0).fields) }
+    }
+
+    private func mediaTags(_ tags: [String], previous: [String: String], fields: [String: String]) -> [String] {
+        let old = ReadingMedia.tagValues(previous["Auto Tags"] ?? "")
+        let suggested = ReadingMedia.suggestedTags(fields, includeGenres: false)
+        var result = tags.filter { !old.contains($0.lowercased()) || suggested.contains($0.lowercased()) }
+        for tag in suggested where !old.contains(tag) && !result.contains(where: { $0.localizedCaseInsensitiveCompare(tag) == .orderedSame }) { result.append(tag) }
+        return result
+    }
+
+    var streamingServiceChoices: [String] {
+        let used = tasks.flatMap { task -> [String] in
+            let fields = specializedDetails(task).fields
+            return ReadingMedia.watchLinks(fields).map(\.provider) + [fields["Streaming Service"] ?? ""]
+        }
+        var choices: [String] = []
+        for raw in (preferences.stringArray(forKey: "TaskFlow.streamingServices") ?? []) + used + ReadingMedia.providers {
+            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty && !choices.contains(where: { $0.localizedCaseInsensitiveCompare(value) == .orderedSame }) { choices.append(value) }
+        }
+        return choices
+    }
+
+    private func rememberStreamingServices(_ fields: [String: String]) {
+        let values = ReadingMedia.watchLinks(fields).map(\.provider) + [fields["Streaming Service"] ?? ""]
+        let previous = preferences.stringArray(forKey: "TaskFlow.streamingServices") ?? []
+        preferences.set(Array(Set((previous + values).filter { !$0.isEmpty })).sorted(), forKey: "TaskFlow.streamingServices")
+    }
+
+    func addReadingLink(title: String, url: URL, listID: String, metadata: ReadingLinkMetadata? = nil, note: String = "", captureID: UUID? = nil, mergeIntoID: String? = nil, watchHint: Bool = false, previewFilename: String? = nil, streamingService: String = "") async -> Bool {
+        guard !isUndoing, ReadingMedia.isWebURL(url) else { return false }
+        if let mergeIntoID, !tasks.contains(where: { $0.id == mergeIntoID && $0.listID == listID }) { return false }
+        let existing = mergeIntoID.flatMap { currentTask(id: $0) } ?? tasks.first {
+            ReadingMedia.identifiesItem(url) && $0.listID == listID && specializedDetails($0).fields["Merged Into"] == nil && (ReadingMedia.watchLinks(specializedDetails($0).fields).contains { ReadingMedia.canonicalURL($0.url) == ReadingMedia.canonicalURL(url.absoluteString) } || ReadingMedia.canonicalURL(specializedDetails($0).fields["Resolved Link"] ?? "") == ReadingMedia.canonicalURL(url.absoluteString))
+        }
+        var incoming = metadata?.fields ?? [:]
+        if let previewFilename { incoming["Local Preview"] = previewFilename }
+        incoming["Source Link"] = url.absoluteString
+        incoming["Progress"] = "Saved"
+        if !streamingService.isEmpty { incoming["Streaming Service"] = streamingService }
+        if let service = ReadingMedia.provider(for: url) { incoming["Saved From"] = service }
+        if incoming["Format"] == nil { incoming["Format"] = ReadingMedia.format(for: url) }
+        if watchHint, incoming["Format"] == "Article" { incoming["Format"] = "Video" }
+        var details = existing.map(specializedDetails) ?? SpecializedTaskDetails()
+        let previous = details
+        if existing == nil { details.fields = incoming }
+        else {
+            details.fields = ReadingMedia.enrich(details.fields, with: incoming.filter { !["Source Link", "Progress", "Saved From"].contains($0.key) })
+            details.fields["Watch Links"] = ReadingMedia.encodeLinks(ReadingMedia.watchLinks(details.fields) + ReadingMedia.watchLinks(incoming))
+        }
+        if let captureID { details.fields["Share Capture IDs"] = Array(Set(ReadingMedia.captureIDs(details.fields) + [captureID.uuidString])).sorted().joined(separator: ",") }
+        var draft = existing.map(TaskDraft.init(task:)) ?? TaskDraft(listID: listID)
+        if existing == nil {
+            let proposed = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? metadata?.title ?? "" : title
+            draft.title = ReadingMedia.cleanTitle(proposed, url: url)
+            if draft.title.isEmpty { draft.title = url.host ?? url.absoluteString }
+            draft.notes = note
+            if metadata == nil {
+                details.fields["Preview Status"] = "Pending"
+                if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { details.fields["Captured Title"] = draft.title }
+                details.fields["Captured Format"] = details.fields["Format"]
+            }
+        } else if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !draft.notes.contains(note) {
+            draft.notes += (draft.notes.isEmpty ? "" : "\n\n") + note
+        }
+        draft.tags = mediaTags(draft.tags, previous: previous.fields, fields: details.fields)
+        details.fields["Auto Tags"] = ReadingMedia.suggestedTags(details.fields, includeGenres: false).joined(separator: ",")
         do {
             let id = try reminderService.saveTask(draft, metadataStore: metadataStore)
-            var details = SpecializedTaskDetails()
-            details.fields = (metadata?.fields ?? [:]).merging(["Source Link": url.absoluteString, "Progress": "Saved"]) { _, required in required }
             specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = details
             metadataStore.specializedTasks = specializedTasks
             taskRedo = nil
-            taskUndo = TaskUndo(message: "Save reading link", previous: [], wasDeleted: false, createdTaskIDs: [id])
+            if let existing {
+                offerUndo("Add media link", previous: [existing])
+                taskUndo?.specializedPrevious = [existing.id: previous]
+            } else { taskUndo = TaskUndo(message: "Save reading link", previous: [], wasDeleted: false, createdTaskIDs: [id]) }
             feedbackSequence += 1
             await refreshTasks()
+            await consumeWatchedEpisodeActions()
+            resumeReadingPreviews()
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    /// Preserve both originals for Undo; the incoming entry is archived and hidden after consolidation.
+    func mergeMediaItem(_ source: TaskItem, into target: TaskItem) async -> Bool {
+        guard !isUndoing, source.id != target.id, source.listID == target.listID, source.parentID == nil, target.parentID == nil else { return false }
+        let incoming = specializedDetails(source), previous = specializedDetails(target)
+        var merged = previous
+        merged.fields = ReadingMedia.enrich(merged.fields, with: incoming.fields.filter { !["Source Link", "Progress", "Preview Status", "Captured Title", "Captured Format", "Merged Into", "Saved From"].contains($0.key) })
+        merged.fields["Watch Links"] = ReadingMedia.encodeLinks(ReadingMedia.watchLinks(previous.fields) + ReadingMedia.watchLinks(incoming.fields))
+        merged.fields["Share Capture IDs"] = Array(Set(ReadingMedia.captureIDs(previous.fields) + ReadingMedia.captureIDs(incoming.fields))).sorted().joined(separator: ",")
+        var draft = TaskDraft(task: target)
+        draft.tags = Array(Set(target.tags + source.tags)).sorted()
+        if !source.notes.isEmpty, !draft.notes.contains(source.notes) { draft.notes += (draft.notes.isEmpty ? "" : "\n\n") + source.notes }
+        do {
+            var archivedDraft = TaskDraft(task: source)
+            archivedDraft.isCompleted = true
+            archivedDraft.status = .done
+            try reminderService.saveTasks([draft, archivedDraft], metadataStore: metadataStore)
+            var archived = incoming
+            archived.fields["Merged Into"] = target.id
+            archived.fields["Progress"] = "Finished"
+            setSpecializedDetails(merged, for: target)
+            setSpecializedDetails(archived, for: source)
+            offerUndo("Combine media links", previous: [target, source])
+            taskUndo?.specializedPrevious = [target.id: previous, source.id: incoming]
+            await refreshTasks()
+            openTask(id: target.id)
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func saveMediaItem(_ details: SpecializedTaskDetails, title: String, note: String, tags: [String], for task: TaskItem) async -> Bool {
+        guard !isUndoing, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let current = currentTask(id: task.id) ?? task, previous = specializedDetails(task)
+        var draft = TaskDraft(task: current)
+        draft.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.notes = note
+        draft.tags = tags
+        let stage = details.fields["Progress"] ?? ""
+        if SpecializedListType.reading.stages.contains(stage), current.isCompleted != (stage == "Finished") {
+            draft.isCompleted = stage == "Finished"
+            draft.status = stage == "Finished" ? .done : .active
+        }
+        do {
+            _ = try reminderService.saveTask(draft, metadataStore: metadataStore)
+            rememberStreamingServices(details.fields)
+            var saved = details
+            if saved.fields["Thumbnail URL"] != previous.fields["Thumbnail URL"] { saved.fields.removeValue(forKey: "Local Preview") }
+            if !(saved.fields["Thumbnail URL"] ?? "").isEmpty { saved.fields.removeValue(forKey: "Suppress Preview") }
+            if saved.fields["Source Link"] != previous.fields["Source Link"] {
+                saved.fields.removeValue(forKey: "Resolved Link")
+                if let raw = saved.fields["Source Link"], let url = URL(string: raw), ReadingMedia.isWebURL(url) { saved.fields["Preview Status"] = "Pending" }
+                else { saved.fields.removeValue(forKey: "Preview Status") }
+            }
+            // An explicit edit owns the title/type, even while a preview is running.
+            saved.fields.removeValue(forKey: "Captured Title")
+            saved.fields.removeValue(forKey: "Captured Format")
+            setSpecializedDetails(saved, for: current)
+            offerUndo("Edit media item", previous: [current])
+            taskUndo?.specializedPrevious = [current.id: previous]
+            await refreshTasks()
+            resumeReadingPreviews()
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
@@ -2013,19 +2336,271 @@ final class TaskRepository {
             }
     }
 
-    /// The Reading list shared links go to: the selected one, then the default list, then the first.
-    var preferredReadingListID: String? {
+    var preferredReadingListID: String? { preferredMediaListID(watch: false) }
+
+    func preferredMediaListID(watch: Bool) -> String? {
         let reading = lists.filter { listProfile($0.id).type == .reading }
-        if case .list(let id) = selectedScope, reading.contains(where: { $0.id == id }) { return id }
+        let configured = ReadingMedia.defaults.string(forKey: ReadingMedia.preferenceKey(watch: watch))
+        if let configured, reading.contains(where: { $0.id == configured }) { return configured }
         return reading.first { $0.id == defaultListID }?.id ?? reading.first?.id
     }
 
-    /// Saves a link shared from another app, filling in its title and details from the page.
+    func publishReadingDestinations() {
+        let reading = lists.filter { listProfile($0.id).type == .reading }
+        let ordered = reading.filter { $0.id == defaultListID } + reading.filter { $0.id != defaultListID }
+        let destinations = ordered.map { ["id": $0.id, "title": $0.title] }
+        ReadingMedia.defaults.set(destinations, forKey: ReadingMedia.destinationsKey)
+    }
+
     func addSharedReadingLink(_ url: URL) async -> Bool {
-        guard let listID = preferredReadingListID else { return false }
-        let metadata = await ReadingLinkMetadata.fetch(url)
-        let title = metadata?.title.isEmpty == false ? metadata?.title ?? "" : (url.host ?? url.absoluteString)
-        return await addReadingLink(title: String(title.prefix(200)), url: url, listID: listID, metadata: metadata)
+        guard let listID = preferredMediaListID(watch: ReadingMedia.action(for: ReadingMedia.format(for: url)) == "Watch") else { return false }
+        return await addReadingLink(title: "", url: url, listID: listID)
+    }
+
+    func importMediaCapture(_ capture: ReadingMedia.Capture) async -> Bool {
+        if specializedTasks.values.contains(where: { ReadingMedia.captureIDs($0.fields).contains(capture.id.uuidString) }) { return true }
+        guard let url = URL(string: capture.url), ReadingMedia.isWebURL(url) else { return false }
+        let destination = lists.first { $0.id == capture.listID && listProfile($0.id).type == .reading }?.id
+            ?? preferredMediaListID(watch: capture.watch)
+        guard let destination else { return false }
+        return await addReadingLink(title: capture.title, url: url, listID: destination, note: capture.note, captureID: capture.id, watchHint: capture.watch, previewFilename: capture.previewFilename)
+    }
+
+    private var readingPreviewJobs: Set<String> = []
+
+    /// Pending markers survive relaunch. Only unchanged capture values or empty fields are enriched.
+    func resumeReadingPreviews() {
+        for task in tasks where listProfile(task.listID).type == .reading && specializedDetails(task).fields["Merged Into"] == nil {
+            guard readingPreviewJobs.count < 4 else { break }
+            let initial = specializedDetails(task)
+            guard initial.fields["Preview Status"] == "Pending", !readingPreviewJobs.contains(task.id),
+                  let raw = initial.fields["Source Link"], let url = URL(string: raw) else { continue }
+            readingPreviewJobs.insert(task.id)
+            Task {
+                defer { readingPreviewJobs.remove(task.id); resumeReadingPreviews() }
+                let metadata = await ReadingLinkMetadata.fetch(url)
+                guard let current = currentTask(id: task.id) else { return }
+                var latest = specializedDetails(current)
+                guard latest.fields["Source Link"] == raw, latest.fields["Preview Status"] == "Pending" else { return }
+                if let metadata {
+                    latest.fields = ReadingMedia.enrich(latest.fields, with: metadata.fields)
+                    var draft = TaskDraft(task: current)
+                    if current.title == latest.fields["Captured Title"], !metadata.title.isEmpty { draft.title = String(metadata.title.prefix(200)) }
+                    draft.tags = mediaTags(current.tags, previous: initial.fields, fields: latest.fields)
+                    latest.fields["Auto Tags"] = ReadingMedia.suggestedTags(latest.fields, includeGenres: false).joined(separator: ",")
+                    if draft.title != current.title || draft.tags != current.tags {
+                        do { _ = try reminderService.saveTask(draft, metadataStore: metadataStore) }
+                        catch { errorMessage = error.localizedDescription }
+                    }
+                    latest.fields["Preview Status"] = "Ready"
+                } else { latest.fields["Preview Status"] = "Unavailable" }
+                latest.fields.removeValue(forKey: "Captured Title")
+                latest.fields.removeValue(forKey: "Captured Format")
+                specializedTasks[current.metadataID] = latest
+                metadataStore.specializedTasks = specializedTasks
+                await refreshTasks()
+            }
+        }
+    }
+
+    private var refreshingShows: Set<String> = []
+    func matchWatchShow(_ showID: Int, taskID: String, automatic: Bool = false) async -> Bool {
+        guard refreshingShows.insert(taskID).inserted else { return false }
+        defer { refreshingShows.remove(taskID) }
+        do {
+            var catalog = try await ReadingMedia.fetchTracking(id: showID)
+            try Task.checkCancellation()
+            guard let task = currentTask(id: taskID), !isUndoing else { return false }
+            var details = specializedDetails(task)
+            if automatic, ReadingMedia.tracking(details.fields)?.show.id != showID { return false }
+            if let old = ReadingMedia.tracking(details.fields), old.show.id == showID { catalog.watched = old.watched }
+            details.fields["Show Tracking"] = ReadingMedia.encodeTracking(catalog)
+            details.fields["Format"] = "TV Show"
+            details.fields["Genres"] = (catalog.show.genres ?? []).joined(separator: ", ")
+            details.fields["Year"] = catalog.show.premiered.map { String($0.prefix(4)) }
+            details.fields["Runtime Minutes"] = catalog.show.averageRuntime.map(String.init)
+            if details.fields["Artwork Override"] != "true", details.fields["Suppress Preview"] != "true", (!automatic || (details.fields["Thumbnail URL"] ?? "").isEmpty), let image = catalog.show.thumbnail { details.fields["Thumbnail URL"] = image.absoluteString }
+            details.fields["Artwork Credit"] = catalog.show.url.absoluteString
+            if details.fields["Progress"] != "Dropped" { details.fields["Progress"] = catalog.progress() }
+            if automatic {
+                // Catalog refresh must not replace the user's Undo or reopen a manually finished item.
+                if task.isCompleted { details.fields["Progress"] = "Finished" }
+                else if details.fields["Progress"] == "Finished" { details.fields["Progress"] = "Caught Up" }
+                setSpecializedDetails(details, for: task)
+                scheduleCloudSync()
+                await rescheduleNotifications()
+                return true
+            }
+            let result = await saveSpecializedDetails(details, for: task, type: .reading)
+            await rescheduleNotifications()
+            return result
+        } catch { if !automatic { errorMessage = "Show information could not be refreshed. Your saved progress is unchanged. Please try again." }; return false }
+    }
+    @discardableResult
+    func setWatchedEpisodes(_ ids: Set<Int>, watched: Bool, taskID: String) async -> Bool {
+        guard let task = currentTask(id: taskID), !isUndoing else { return false }
+        var details = specializedDetails(task)
+        guard var catalog = ReadingMedia.tracking(details.fields) else { return false }
+        let eligible = Set(catalog.episodes.filter { $0.release.map { $0 <= Date() } == true }.map(\.id))
+        if watched, !ids.intersection(eligible).subtracting(catalog.watched).isEmpty { details.fields["Last Watched At"] = ISO8601DateFormatter().string(from: Date()) }
+        if watched { catalog.watched.formUnion(ids.intersection(eligible)) } else { catalog.watched.subtract(ids) }
+        details.fields["Show Tracking"] = ReadingMedia.encodeTracking(catalog)
+        details.fields["Progress"] = catalog.progress() == "Finished" ? "Caught Up" : catalog.progress()
+        if let next = catalog.next() { details.fields["Season"] = String(next.season); details.fields["Episode"] = next.number.map(String.init) }
+        else { details.fields.removeValue(forKey: "Season"); details.fields.removeValue(forKey: "Episode") }
+        return await saveSpecializedDetails(details, for: task, type: .reading)
+    }
+    @discardableResult
+    func setEpisodePosition(_ episodeID: Int, catchUp: Bool, taskID: String) async -> Bool {
+        guard let task = currentTask(id: taskID), !isUndoing else { return false }
+        var details = specializedDetails(task)
+        guard var catalog = ReadingMedia.tracking(details.fields), let index = catalog.ordered.firstIndex(where: { $0.id == episodeID }) else { return false }
+        let count = index + (catchUp ? 1 : 0)
+        let ids = Set(catalog.ordered.prefix(count).filter { $0.release.map { $0 <= Date() } == true }.map(\.id))
+        if catchUp { catalog.watched.formUnion(ids) } else { catalog.watched = ids }
+        details.fields["Show Tracking"] = ReadingMedia.encodeTracking(catalog)
+        details.fields["Progress"] = catalog.progress() == "Finished" ? "Caught Up" : catalog.progress()
+        if let next = catalog.next() { details.fields["Season"] = String(next.season); details.fields["Episode"] = next.number.map(String.init) }
+        else { details.fields.removeValue(forKey: "Season"); details.fields.removeValue(forKey: "Episode") }
+        return await saveSpecializedDetails(details, for: task, type: .reading)
+    }
+
+    private var consumingEpisodeActions = false
+    func consumeWatchedEpisodeActions(directory: URL? = WatchedEpisodeActionStore.directory) async {
+        guard accessState == .granted, !isUndoing, !consumingEpisodeActions else { return }
+        consumingEpisodeActions = true
+        defer { consumingEpisodeActions = false }
+        let pending = WatchedEpisodeActionStore.pending(directory: directory)
+        var candidates = tasks
+        if pending.contains(where: { action in !tasks.contains(where: { $0.id == action.taskID || $0.metadataID == action.metadataID }) }) {
+            candidates = await reminderService.loadTasks(metadataStore: metadataStore)
+        }
+        for action in pending {
+            guard !Task.isCancelled else { break }
+            guard let task = currentTask(id: action.taskID) ?? candidates.first(where: { $0.id == action.taskID || $0.metadataID == action.metadataID }), !task.isCompleted,
+                  let fields = ReadingMedia.markingEpisodeWatched(specializedDetails(task).fields, showID: action.showID, episodeID: action.episodeID) else {
+                WatchedEpisodeActionStore.acknowledge(action, directory: directory)
+                continue
+            }
+            if await saveSpecializedDetails(.init(fields: fields), for: task, type: .reading) {
+                WatchedEpisodeActionStore.acknowledge(action, directory: directory)
+                await EpisodeNotificationActions.retire(taskID: task.id, showID: action.showID, episodeID: action.episodeID)
+            }
+        }
+    }
+    func reconcileWatchedEpisodeActions() async {
+        accessState = reminderService.authorizationState
+        guard accessState == .granted else { return }
+        if !hasLoadedInitialData { applyMetadata(); lists = visibleLists() }
+        await refreshTasks(force: true)
+        await consumeWatchedEpisodeActions()
+    }
+    func handleEpisodeNotification(taskID: String, showID: Int, episodeID: Int, snooze: Bool, content: UNNotificationContent) async -> Bool {
+        await reconcileWatchedEpisodeActions()
+        guard accessState == .granted else { return false }
+        var target = currentTask(id: taskID)
+        if target == nil { target = await reminderService.loadTasks(metadataStore: metadataStore).first(where: { $0.id == taskID }) }
+        guard let task = target, !task.isCompleted else { return false }
+        let fields = specializedDetails(task).fields
+        guard fields["Episode Alerts"] == "true", fields["Progress"] != "Dropped", fields["Merged Into"] == nil,
+              let catalog = ReadingMedia.tracking(fields), catalog.show.id == showID, !catalog.watched.contains(episodeID),
+              let episode = catalog.episodes.first(where: { $0.id == episodeID }) else { return false }
+        if snooze {
+            guard let request = EpisodeNotificationActions.snoozeRequest(content: content, canMarkWatched: episode.release.map { $0 <= Date().addingTimeInterval(3600) } == true) else { return false }
+            do { try await UNUserNotificationCenter.current().add(request); return true }
+            catch { errorMessage = "The episode reminder could not be scheduled. Please try again."; return false }
+        }
+        guard let updated = ReadingMedia.markingEpisodeWatched(fields, showID: showID, episodeID: episodeID),
+              await saveSpecializedDetails(.init(fields: updated), for: task, type: .reading) else { return false }
+        await EpisodeNotificationActions.retire(taskID: taskID, showID: showID, episodeID: episodeID)
+        return true
+    }
+    func refreshWatchInBackground() async -> Bool {
+        guard reminderService.authorizationState == .granted, !Task.isCancelled else { return false }
+        accessState = reminderService.authorizationState
+        if !hasLoadedInitialData { applyMetadata(); lists = visibleLists() }
+        await refreshTasks(force: true)
+        guard !Task.isCancelled else { return false }
+        await consumeWatchedEpisodeActions()
+        let success = await refreshWatchReleaseSchedules(maximumShows: 3)
+        if !Task.isCancelled { await rescheduleNotifications() }
+        return success
+    }
+    func refreshWatchReleaseSchedules(maximumShows: Int = .max) async -> Bool {
+        var success = true
+        var refreshed = 0
+        let candidates = tasks.compactMap { task -> (TaskItem, ReadingMedia.ShowTracking)? in
+            guard !task.isCompleted else { return nil }
+            let fields = specializedDetails(task).fields
+            guard fields["Progress"] != "Dropped", fields["Merged Into"] == nil,
+                  let show = ReadingMedia.tracking(fields) else { return nil }
+            return (task, show)
+        }.sorted { $0.1.refreshedAt < $1.1.refreshedAt }
+        for (task, show) in candidates {
+            guard !Task.isCancelled, refreshed < maximumShows else { break }
+            refreshed += 1
+            if !(await matchWatchShow(show.show.id, taskID: task.id, automatic: true)) { success = false }
+        }
+        return success
+    }
+    func refreshWatchShowsIfNeeded() async {
+        for task in tasks where !task.isCompleted {
+            var details = specializedDetails(task)
+            guard details.fields["Progress"] != "Dropped", let catalog = ReadingMedia.tracking(details.fields) else { continue }
+            let stage = catalog.progress() == "Finished" ? "Caught Up" : catalog.progress()
+            if details.fields["Progress"] != stage { details.fields["Progress"] = stage; setSpecializedDetails(details, for: task) }
+            if Date().timeIntervalSince(catalog.refreshedAt) >= 12 * 3600 {
+                _ = await matchWatchShow(catalog.show.id, taskID: task.id, automatic: true)
+            }
+        }
+    }
+    var episodeReleaseAlerts: [NotificationScheduler.DeadlineAlert] {
+        var seen: Set<String> = []
+        return tasks.sorted { $0.id < $1.id }.flatMap { task -> [NotificationScheduler.DeadlineAlert] in
+            let fields = specializedDetails(task).fields
+            guard !task.isCompleted, fields["Episode Alerts"] == "true", fields["Progress"] != "Dropped", fields["Merged Into"] == nil, let catalog = ReadingMedia.tracking(fields) else { return [] }
+            let ordered = catalog.ordered
+            let groups = Dictionary(grouping: ordered.filter { !catalog.watched.contains($0.id) && $0.airdate != nil }, by: { $0.airdate! })
+            return groups.sorted { $0.key < $1.key }.compactMap { date, episodes in
+                guard let day = SpecializedTaskDetails.dateValue(date), seen.insert("\(catalog.show.id):\(date)").inserted else { return nil }
+                let advance = Int(fields["Episode Alert Advance"] ?? "0") ?? 0
+                let exact = advance > 0 ? episodes.compactMap { episode in episode.airstamp == nil ? nil : episode.release }.min()?.addingTimeInterval(-Double(advance) * 60) : nil
+                return NotificationScheduler.DeadlineAlert(taskID: task.id, listID: task.listID, taskTitle: task.title, label: "Episode Release", date: day, leadDays: 0,
+                    customBody: "\(task.title) · \(episodes.count == 1 ? episodes[0].label : "\(episodes.count) episodes") scheduled to release \(exact == nil ? "today" : "at the listed air time"). Check your saved service for availability.",
+                    hour: Int(fields["Episode Alert Hour"] ?? "9") ?? 9, minute: Int(fields["Episode Alert Minute"] ?? "0") ?? 0, exactFireDate: exact, playsSound: fields["Episode Alert Sound"] != "false", episodeShowID: catalog.show.id,
+                    episodeID: episodes.first?.id,
+                    episodeLabel: episodes.first?.label,
+                    episodeRelease: episodes.first?.release)
+            }
+        }
+    }
+
+    func applyShowArtwork(_ show: ReadingMedia.ShowArtwork, to task: TaskItem) async -> Bool {
+        guard let current = currentTask(id: task.id), let thumbnail = show.thumbnail else { return false }
+        var updated = specializedDetails(current)
+        let previous = updated.fields
+        updated.fields["Thumbnail URL"] = thumbnail.absoluteString
+        updated.fields["Artwork Override"] = "true"
+        updated.fields.removeValue(forKey: "Local Preview")
+        updated.fields.removeValue(forKey: "Suppress Preview")
+        updated.fields["Artwork Credit"] = show.url.absoluteString
+        updated.fields["Format"] = "TV Show"
+        updated.fields.removeValue(forKey: "Captured Format")
+        let tags = mediaTags(current.tags, previous: previous, fields: updated.fields)
+        updated.fields["Auto Tags"] = ReadingMedia.suggestedTags(updated.fields, includeGenres: false).joined(separator: ",")
+        return await saveMediaItem(updated, title: current.title, note: current.notes, tags: tags, for: current)
+    }
+
+    func retryReadingPreview(_ task: TaskItem) {
+        var details = specializedDetails(task)
+        guard let raw = details.fields["Source Link"], let url = URL(string: raw), ReadingMedia.isWebURL(url) else {
+            errorMessage = "Add a valid source link before retrying the preview."
+            return
+        }
+        details.fields = ReadingMedia.previewRetryFields(details.fields, title: task.title)
+        specializedTasks[task.metadataID] = details
+        metadataStore.specializedTasks = specializedTasks
+        resumeReadingPreviews()
     }
 
     func addShoppingItems(_ entries: [ShoppingCaptureItem], listID: String, increaseDuplicates: Bool = false) async -> Int {
@@ -2034,7 +2609,7 @@ final class TaskRepository {
             details.fields = ["Quantity": item.quantity, "Category": item.category]
             return SpecializedListTemplate.Item(title: item.title, notes: "", details: details)
         }
-        return await addShoppingSelection(items, listID: listID, store: listProfile(listID).settings["Store Filter"] ?? listProfile(listID).settings["Last Store"] ?? "", increaseDuplicates: increaseDuplicates)
+        return await addShoppingSelection(items, listID: listID, store: shoppingCaptureStore(for: listID), increaseDuplicates: increaseDuplicates)
     }
 
     /// Saves suggestions and custom entries together, preserving their optional item details.
@@ -2538,6 +3113,13 @@ final class TaskRepository {
         return try metadataStore.saveFileAttachment(data: data, suggestedName: suggestedName, kind: .photo)
     }
 
+    func useMyCalendars() async {
+        if eventAccessState != .granted { await requestEventCalendarAccess() }
+        guard eventAccessState == .granted else { return }
+        selectedEventCalendarIDs = Set(eventCalendars.map(\.id))
+        await refreshCalendarEvents()
+    }
+
     func requestEventCalendarAccess() async {
         _ = await reminderService.requestEventAccess()
         updateCalendarAccessState()
@@ -2598,7 +3180,10 @@ final class TaskRepository {
         notificationStatus = authorization.canSchedule ? .granted : (authorization == .denied ? .denied : .unknown)
         if accessState == .granted {
             lists = visibleLists()
+            publishReadingDestinations()
             await refreshTasks(force: false)
+            resumeReadingPreviews()
+            Task { await refreshWatchShowsIfNeeded() }
             if let id = pendingOpenTaskID { openTask(id: id) }
         } else {
             lists = []
@@ -2713,7 +3298,7 @@ final class TaskRepository {
     func refreshDeadlineReminders() async { await rescheduleNotifications() }
 
     private func rescheduleNotifications() async {
-        await notificationScheduler.rescheduleNotifications(for: tasks, deadlines: billDeadlineAlerts, enabled: notificationsEnabled)
+        await notificationScheduler.rescheduleNotifications(for: tasks, deadlines: billDeadlineAlerts + episodeReleaseAlerts, enabled: notificationsEnabled)
         await syncDueTodayActivity()
     }
 
@@ -2785,10 +3370,11 @@ struct ReadingLinkMetadata: Equatable, Sendable {
     var format = ""
     var thumbnailURL: URL?
     var estimatedMinutes: Int?
+    var mediaFields: [String: String] = [:]
 
     /// Fields for `SpecializedTaskDetails`, leaving out anything unknown.
     var fields: [String: String] {
-        var result: [String: String] = [:]
+        var result: [String: String] = mediaFields
         if !creator.isEmpty { result["Creator"] = creator }
         if !format.isEmpty { result["Format"] = format }
         if let thumbnailURL { result["Thumbnail URL"] = thumbnailURL.absoluteString }
@@ -2799,14 +3385,81 @@ struct ReadingLinkMetadata: Equatable, Sendable {
     private static let maximumBytes = 1_000_000
 
     static func fetch(_ url: URL) async -> ReadingLinkMetadata? {
-        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        var result = await fetchHTML(url)
+        if result?.thumbnailURL == nil, let preview = await fetchLinkPreview(url) {
+            if result == nil { result = preview }
+            else {
+                if result?.title.isEmpty == true { result?.title = preview.title }
+                result?.mediaFields.merge(preview.mediaFields) { existing, _ in existing }
+            }
+        }
+        return result
+    }
+
+    @MainActor
+    private static func fetchLinkPreview(_ url: URL) async -> ReadingLinkMetadata? {
+        let provider = LPMetadataProvider()
+        provider.timeout = 8
+        let metadata: LPLinkMetadata? = await withCheckedContinuation { continuation in
+            provider.startFetchingMetadata(for: url) { metadata, _ in continuation.resume(returning: metadata) }
+        }
+        guard let metadata else { return nil }
+        let resolved = metadata.url ?? url
+        var result = ReadingLinkMetadata(title: ReadingMedia.cleanTitle(metadata.title ?? "", url: resolved), format: ReadingMedia.format(for: resolved))
+        result.mediaFields["Resolved Link"] = resolved.absoluteString
+        result.mediaFields["Saved From"] = ReadingMedia.provider(for: resolved)
+        if let imageProvider = metadata.imageProvider {
+            let data: Data? = await withCheckedContinuation { continuation in
+                imageProvider.loadDataRepresentation(forTypeIdentifier: "public.image") { data, _ in continuation.resume(returning: data) }
+            }
+            if let data, data.count <= 8_000_000, let image = UIImage(data: data) {
+                let ratio = min(1, 640 / max(image.size.width, image.size.height))
+                let rendererFormat = UIGraphicsImageRendererFormat(); rendererFormat.scale = 1
+                let resized = UIGraphicsImageRenderer(size: CGSize(width: max(1, image.size.width * ratio), height: max(1, image.size.height * ratio)), format: rendererFormat).image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: CGSize(width: max(1, image.size.width * ratio), height: max(1, image.size.height * ratio))))
+                }
+                if let jpeg = resized.jpegData(compressionQuality: 0.8), let filename = ReadingMedia.storePreview(jpeg, id: UUID()) { result.mediaFields["Local Preview"] = filename }
+            }
+        }
+        return result
+    }
+
+    // Netflix's public title pages place structured metadata after several MB of CSS.
+    private static func maximumBytes(for url: URL) -> Int {
+        ReadingMedia.provider(for: url) == "Netflix" ? 4_000_000 : maximumBytes
+    }
+
+    static func parseResponse(data: Data, baseURL: URL, isComplete: Bool) -> ReadingLinkMetadata? {
+        guard !data.isEmpty else { return nil }
+        let limit = maximumBytes(for: baseURL)
+        let prefix = data.prefix(limit)
+        guard let html = String(data: prefix, encoding: .utf8) ?? String(data: prefix, encoding: .isoLatin1) else { return nil }
+        return parse(html: html, baseURL: baseURL, isComplete: isComplete && data.count <= limit)
+    }
+
+    private static func fetchHTML(_ url: URL) async -> ReadingLinkMetadata? {
+        guard ReadingMedia.isWebURL(url) else { return nil }
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (bytes, response) = try? await URLSession.shared.bytes(for: request),
               (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else { return nil }
-        let prefix = data.prefix(maximumBytes)
-        guard let html = String(data: prefix, encoding: .utf8) ?? String(data: prefix, encoding: .isoLatin1) else { return nil }
-        return parse(html: html, baseURL: response.url ?? url, isComplete: data.count <= maximumBytes)
+        let baseURL = response.url ?? url
+        let limit = maximumBytes(for: baseURL)
+        var data = Data()
+        data.reserveCapacity(min(limit, 64_000))
+        var complete = true
+        do {
+            for try await byte in bytes {
+                if Task.isCancelled { return nil }
+                data.append(byte)
+                if data.count >= limit { complete = false; break }
+            }
+        } catch {
+            // A closed connection can still contain a complete metadata block.
+            if Task.isCancelled { return nil }
+            complete = false
+        }
+        return parseResponse(data: data, baseURL: baseURL, isComplete: complete)
     }
 
     static func parse(html: String, baseURL: URL, isComplete: Bool = true) -> ReadingLinkMetadata {
@@ -2819,19 +3472,78 @@ struct ReadingLinkMetadata: Equatable, Sendable {
             result.thumbnailURL = imageURL
         }
         let type = (meta(["og:type"], in: html) ?? "").lowercased()
-        let host = (baseURL.host ?? "").lowercased()
-        if type.contains("video") || ["youtube.com", "youtu.be", "vimeo.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
-            result.format = "Video"
+        if type.contains("movie") { result.format = "Movie" }
+        else if type.contains("tv_show") { result.format = "TV Show" }
+        else if type.contains("episode") { result.format = "Episode" }
+        else if type.contains("video") || ReadingMedia.action(for: ReadingMedia.format(for: baseURL)) == "Watch" {
+            result.format = ReadingMedia.action(for: ReadingMedia.format(for: baseURL)) == "Watch" ? ReadingMedia.format(for: baseURL) : "Video"
+        } else if type.contains("music") || type.contains("audio") || ReadingMedia.format(for: baseURL) == "Audio" {
+            result.format = "Audio"
         } else if type.contains("book") {
             result.format = "Book"
         } else if type.contains("article") {
             result.format = "Article"
         }
-        if result.format != "Video", isComplete {
+        if result.format.isEmpty { result.format = ReadingMedia.format(for: baseURL) }
+        let structured = structuredMedia(in: html)
+        result.mediaFields = structured.fields
+        if let format = structured.fields["Format"], format != "Article" || ReadingMedia.action(for: result.format) != "Watch" { result.format = format }
+        if let title = structured.title, !title.isEmpty { result.title = title }
+        result.mediaFields.removeValue(forKey: "Thumbnail URL")
+        if let raw = structured.fields["Thumbnail URL"], let image = URL(string: raw, relativeTo: baseURL)?.absoluteURL, image.scheme == "https" { result.thumbnailURL = image }
+        if let service = ReadingMedia.provider(for: baseURL) { result.mediaFields["Saved From"] = service }
+        result.mediaFields["Resolved Link"] = baseURL.absoluteString
+        result.title = ReadingMedia.cleanTitle(result.title, url: baseURL)
+        if result.format == "Article", isComplete {
             let words = wordCount(html)
             if words >= 150 { result.estimatedMinutes = max(1, Int((Double(words) / 230).rounded())) }
         }
         return result
+    }
+
+    private static func structuredMedia(in html: String) -> (title: String?, fields: [String: String]) {
+        guard let regex = try? NSRegularExpression(pattern: #"<script\b[^>]*type\s*=\s*["']application/ld\+json["'][^>]*>([\s\S]*?)</script>"#, options: [.caseInsensitive]) else { return (nil, [:]) }
+        var nodes: [[String: Any]] = []
+        func collect(_ value: Any, depth: Int = 0) {
+            guard depth < 12 else { return }
+            if let array = value as? [Any] { for item in array { collect(item, depth: depth + 1) } }
+            if let object = value as? [String: Any] {
+                nodes.append(object)
+                for key in ["@graph", "mainEntity"] { if let child = object[key] { collect(child, depth: depth + 1) } }
+            }
+        }
+        for match in regex.matches(in: html, range: NSRange(html.startIndex..., in: html)) {
+            guard let range = Range(match.range(at: 1), in: html), let data = String(html[range]).data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data) else { continue }
+            collect(value)
+        }
+        let formats = ["Movie": "Movie", "TVSeries": "TV Show", "TVEpisode": "Episode", "VideoObject": "Video", "PodcastEpisode": "Podcast", "AudioObject": "Audio", "Book": "Book", "Article": "Article", "NewsArticle": "Article", "BlogPosting": "Article"]
+        func format(_ object: [String: Any]) -> String? {
+            let types = (object["@type"] as? [String]) ?? [object["@type"] as? String ?? ""]
+            return types.compactMap { formats[$0.components(separatedBy: "/").last ?? $0] }.first
+        }
+        guard let node = nodes.first(where: { ["Movie", "TV Show", "Episode"].contains(format($0) ?? "") }) ?? nodes.first(where: { format($0) != nil }) else { return (nil, [:]) }
+        var fields: [String: String] = [:]
+        fields["Format"] = format(node)
+        func string(_ value: Any?) -> String? {
+            if let text = value as? String { return text }
+            if let number = value as? NSNumber { return number.stringValue }
+            return nil
+        }
+        if let published = string(node["datePublished"]) ?? string(node["dateCreated"]), published.count >= 4, let year = Int(published.prefix(4)), year > 1800 { fields["Year"] = String(year) }
+        if let genres = node["genre"] as? [String] { fields["Genres"] = genres.joined(separator: ", ") }
+        else if let genre = string(node["genre"]) { fields["Genres"] = genre }
+        fields["Episode"] = string(node["episodeNumber"])
+        if let season = node["partOfSeason"] as? [String: Any] { fields["Season"] = string(season["seasonNumber"]) }
+        if let series = node["partOfSeries"] as? [String: Any] { fields["Series Title"] = string(series["name"]) }
+        let image = node["image"]
+        let firstImage = (image as? [Any])?.first ?? image
+        fields["Thumbnail URL"] = string(firstImage) ?? (firstImage as? [String: Any]).flatMap { string($0["url"]) ?? string($0["contentUrl"]) }
+        if let duration = string(node["duration"]), let regex = try? NSRegularExpression(pattern: #"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$"#), let match = regex.firstMatch(in: duration, range: NSRange(duration.startIndex..., in: duration)) {
+            func component(_ index: Int) -> Int { Range(match.range(at: index), in: duration).flatMap { Int(duration[$0]).map { min($0, 100_000) } } ?? 0 }
+            let minutes = component(1) * 60 + component(2) + (component(3) > 0 ? 1 : 0)
+            if minutes > 0 { fields["Runtime Minutes"] = String(minutes) }
+        }
+        return (string(node["name"]).map(decodeEntities), fields)
     }
 
     private static func meta(_ names: [String], in html: String) -> String? {

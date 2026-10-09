@@ -10,6 +10,8 @@ struct TaskFlowApp: App {
     init() {
         let repository = TaskRepository()
         _repository = State(initialValue: repository)
+        TaskFlowAppDelegate.watchRepository = repository
+        EpisodeWidgetActionHandler.reconcile = { await repository.reconcileWatchedEpisodeActions() }
         let notes: any TaskFlowNoteIntentHandling = RepositoryNoteIntentHandler(repository: repository)
         AppDependencyManager.shared.add(key: "TaskFlowNotes", dependency: notes)
         TaskFlowSharedNotes.save(repository.quickNotes.map(TaskFlowSharedNote.init(note:)))

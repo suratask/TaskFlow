@@ -2,6 +2,7 @@ import CloudKit
 import Foundation
 
 actor CloudMetadataSyncService {
+    private let webNotes = CloudNotesSyncService()
     private var database: CKDatabase { CKContainer(identifier: "iCloud.com.surratt.TaskFlow").privateCloudDatabase }
     private let recordID = CKRecord.ID(recordName: "TaskFlowMetadataSnapshot")
     private let recordType = "TaskFlowMetadata"
@@ -12,18 +13,25 @@ actor CloudMetadataSyncService {
     private static let attachmentLocalPathKey = "localPath"
 
     func synchronize(local snapshot: MetadataSnapshot) async throws -> MetadataSnapshot {
+        let saved: MetadataSnapshot
         do {
             let record = try await database.record(for: recordID)
-            guard let remoteSnapshot = Self.snapshot(from: record) else {
-                throw CocoaError(.coderReadCorrupt)
-            }
-
+            guard let remoteSnapshot = Self.snapshot(from: record) else { throw CocoaError(.coderReadCorrupt) }
             let merged = try snapshot.merging(remoteSnapshot)
-            if merged != remoteSnapshot { return try await save(merged, replacing: record) }
-            return merged
+            saved = merged != remoteSnapshot ? try await save(merged, replacing: record) : merged
         } catch let error as CKError where error.code == .unknownItem {
-            return try await save(snapshot, replacing: nil)
+            saved = try await save(snapshot, replacing: nil)
         }
+        return try await synchronizeWebNotes(saved)
+    }
+
+    private func synchronizeWebNotes(_ snapshot: MetadataSnapshot) async throws -> MetadataSnapshot {
+        guard TaskFlowWebNotesConfiguration.isEnabled else { return snapshot }
+        return try await webNotes.synchronize(snapshot)
+    }
+    func confirmWebNotesSaved() async throws {
+        guard TaskFlowWebNotesConfiguration.isEnabled else { return }
+        try await webNotes.confirmSaved()
     }
 
     func upload(_ snapshot: MetadataSnapshot) async throws {

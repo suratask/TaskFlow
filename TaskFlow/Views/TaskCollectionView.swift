@@ -20,6 +20,7 @@ struct TaskCollectionView: View {
     var titleOverride: String?
     var onExitPlanMyDay: (() -> Void)?
     @SceneStorage("TaskFlow.calendar.search") private var calendarSearch = ""
+    @State private var cleanupListID: String?
     @State private var showsPinnedLists = false
     @State private var confirmsBulkDelete = false
     @State private var isRestoringTaskScroll = false
@@ -128,6 +129,7 @@ struct TaskCollectionView: View {
                             }
                             if case .list(let id) = repository.selectedScope,
                                let list = repository.lists.first(where: { $0.id == id }) {
+                                Button("Clean Up Items", systemImage: "trash") { cleanupListID = id }
                                 Button(repository.pinnedListIDs.contains(id) ? "Unpin List" : "Pin List to Tasks", systemImage: repository.pinnedListIDs.contains(id) ? "pin.slash" : "pin") { repository.togglePinnedList(list) }
                             }
                             Button("Manage Pinned Lists", systemImage: "pin") { showsPinnedLists = true }
@@ -163,6 +165,9 @@ struct TaskCollectionView: View {
                     }
                 }
                 .toolbar(isBulkTagging ? .hidden : .automatic, for: .tabBar)
+                .sheet(isPresented: Binding(get: { cleanupListID != nil }, set: { if !$0 { cleanupListID = nil } })) {
+                    if let id = cleanupListID { ListCleanupView(repository: repository, listID: id) }
+                }
             }
         }
         .overlay {
@@ -245,6 +250,7 @@ struct TaskCollectionView: View {
         Group {
             if case .list(let id) = repository.selectedScope, repository.listProfile(id).type != .standard, effectiveViewMode != .calendar {
                 SpecializedTaskListView(repository: repository, listID: id, viewMode: effectiveViewMode, editorDraft: $editorDraft)
+                    .id(id)
             } else {
             switch effectiveViewMode {
             case .list, .timeline:
@@ -3023,7 +3029,7 @@ private struct TaskFilterMenu: View {
     }
 }
 
-private struct EmptyTaskStateView: View {
+struct EmptyTaskStateView: View {
     @Bindable var repository: TaskRepository
     @Binding var editorDraft: TaskDraft?
 
@@ -3034,7 +3040,7 @@ private struct EmptyTaskStateView: View {
                 systemImage: repository.accessState == .granted ? emptyIcon : "lock.open",
                 description: Text(repository.accessState == .granted ? emptyDescription : repository.accessState.message)
             )
-            HStack(spacing: 10) {
+            VStack(spacing: 10) {
                 if repository.accessState == .unknown {
                     Button {
                         Task { await repository.requestAccess() }
@@ -3063,10 +3069,7 @@ private struct EmptyTaskStateView: View {
 
                 if hasFilters {
                     Button {
-                        repository.clearQuickFilters()
-                        repository.selectedTagFilter = nil
-                        repository.dueFilter = .any
-                        repository.searchQuery = ""
+                        repository.clearTaskFilters()
                     } label: {
                         Label("Clear Filters", systemImage: "line.3.horizontal.decrease.circle")
                     }
@@ -3111,6 +3114,8 @@ struct TaskRowView: View {
     @Bindable var repository: TaskRepository
     var onOpen: (() -> Void)?
     @State private var isCompleting = false
+    @State private var choosingDependencies = false
+    @State private var rescheduling = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -3152,13 +3157,16 @@ struct TaskRowView: View {
                         VStack(alignment: .leading, spacing: 2) { dueLabel; listLabel }
                     }
                     .font(.subheadline).foregroundStyle(.secondary)
-                    if task.status == .waiting || task.status == .blocked {
-                        Label(task.status.rawValue, systemImage: task.status == .blocked ? "hand.raised" : "clock")
+                    if let waiting = repository.waitingOnDescription(task) {
+                        Label(waiting, systemImage: "hourglass")
                             .font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if (density == .detailed || repository.quickTagFilter != nil) && !task.tags.isEmpty {
-                        Text(task.tags.prefix(3).map { "#" + $0 }.joined(separator: " "))
-                            .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        FlowLayout(spacing: 5) {
+                            ForEach(Array(task.tags.prefix(3)), id: \.self) { tag in TaskTagChip(name: tag, color: tagColor(tag)) }
+                            if task.tags.count > 3 { Text("+\(task.tags.count - 3)").font(.caption).foregroundStyle(.secondary) }
+                        }
                     }
                 }
                 .padding(.vertical, density == .compact ? 4 : 8)
@@ -3173,6 +3181,18 @@ struct TaskRowView: View {
         .accessibilityAction(named: task.isFlagged ? "Unflag task" : "Flag task") {
             Task { await repository.setFlagged(!task.isFlagged, for: task) }
         }
+        .accessibilityAction(named: "Reschedule task") { rescheduling = true }
+        .sheet(isPresented: $rescheduling) {
+            BulkRescheduleTasksSheet(selectedCount: 1, initialTask: task) { date, hasTime in
+                Task { await repository.setDueDate(date, hasDueTime: hasTime, forTaskIDs: [task.id]) }
+            }
+        }
+        .sheet(isPresented: $choosingDependencies) {
+            NavigationStack {
+                DependencyTaskPicker(repository: repository, taskID: task.id)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { choosingDependencies = false } } }
+            }
+        }
         .contextMenu {
             Button {
                 Task { await repository.toggleCompletion(for: task) }
@@ -3184,6 +3204,10 @@ struct TaskRowView: View {
             } label: {
                 Label(task.isFlagged ? "Unflag" : "Flag", systemImage: task.isFlagged ? "flag.slash" : "flag")
             }
+            Button(repository.isTodayPriority(task) ? "Remove Today Priority" : "Add to Today Priorities", systemImage: "star") { repository.toggleTodayPriority(task) }
+                .disabled(!repository.isTodayPriority(task) && repository.todayPriorityIDs.count >= 3)
+            Button("Reschedule", systemImage: "calendar") { rescheduling = true }
+            Button("Dependencies", systemImage: "arrow.triangle.branch") { choosingDependencies = true }
             Divider()
             Button(role: .destructive) {
                 Task { await repository.deleteTask(task) }
@@ -3229,12 +3253,19 @@ private enum BulkTagOperation: String, CaseIterable, Identifiable {
     }
 }
 
-private struct BulkRescheduleTasksSheet: View {
+struct BulkRescheduleTasksSheet: View {
     @Environment(\.dismiss) private var dismiss
     let selectedCount: Int
     let onApply: (Date?, Bool?) -> Void
     @State private var dueDate = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
     @State private var includeTime = false
+
+    init(selectedCount: Int, initialTask: TaskItem? = nil, onApply: @escaping (Date?, Bool?) -> Void) {
+        self.selectedCount = selectedCount
+        self.onApply = onApply
+        _dueDate = State(initialValue: initialTask?.dueDate ?? Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date())
+        _includeTime = State(initialValue: initialTask?.hasDueTime ?? false)
+    }
 
     var body: some View {
         NavigationStack {
@@ -3531,6 +3562,7 @@ struct TasksHomeView: View {
                                 Button(repository.pinnedListIDs.contains(list.id) ? "Unpin" : "Pin", systemImage: "pin") { repository.togglePinnedList(list) }.tint(.orange)
                             }
                     }
+                    NavigationLink("Reorder Lists", destination: ListOrderEditor(repository: repository))
                     Button("New List", systemImage: "plus") { showsNewList = true }
                 }
                 Section("Smart Lists") {

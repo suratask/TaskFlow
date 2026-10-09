@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark">
+  <title>TaskFlow Notes</title><link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="vendor/quill.core.css"><script src="vendor/quill.js" defer></script>
+  <script src="config.js" defer></script><script type="module" src="app.mjs"></script>
+</head>
+<body>
+<header><a class="brand" href="https://modcaststudios.app/#app/taskflow"><span class="brand-icon" aria-hidden="true">✓</span> TaskFlow <span class="subbrand">Notes</span></a><div class="header-actions"><span id="sync-status" role="status" aria-live="polite">Your notes, wherever you are.</span><button id="refresh" hidden>Refresh</button><button id="signout" hidden>Sign Out</button></div></header>
+<div id="notice" class="notice" role="status" hidden></div>
+<main id="welcome" class="welcome">
+  <div class="eyebrow">TASKFLOW NOTES ON THE WEB</div><h1>A little space<br>for your thoughts.</h1>
+  <p>Read, write, and pick up where you left off.<br>Your notes stay in your own iCloud.</p>
+  <button id="connect" class="primary">Continue with iCloud</button><div id="apple-signin"></div><div id="apple-signout" hidden></div>
+  <button id="try-demo" class="quiet">Explore with sample notes</button>
+  <p class="privacy">Use the same Apple Account as TaskFlow.<br>No separate TaskFlow account needed.</p>
+  <p id="welcome-error" class="error" role="alert"></p>
+</main>
+<main id="workspace" class="workspace" hidden>
+  <aside class="sidebar"><div class="sidebar-heading"><h1>Notes</h1><button id="new-note" class="primary" aria-label="New note">＋ New</button></div>
+    <label class="sr-only" for="search">Search notes</label><input id="search" type="search" placeholder="Search your notes…">
+    <div class="filters"><label class="sr-only" for="folder-filter">Filter by folder</label><select id="folder-filter"><option value="">All folders</option></select><button id="trash-filter" aria-pressed="false">Trash</button></div>
+    <span id="note-count" class="muted"></span><div id="note-list" class="note-list"></div>
+  </aside>
+  <section class="editor-pane"><div id="empty-selection" class="empty"><span class="empty-icon" aria-hidden="true">✎</span><h2>Room for your next idea.</h2><p>Choose a note or start a new one.</p></div>
+    <div id="editor" hidden>
+      <div class="editor-meta"><label>Folder <input id="note-folder" placeholder="Unfiled" list="folder-names"></label><datalist id="folder-names"></datalist><div><button id="pin-note" aria-pressed="false">Pin</button><button id="preview-toggle" aria-pressed="false">Preview</button><button id="trash-note">Move to Trash</button></div></div>
+      <label class="sr-only" for="note-title">Note title</label><input id="note-title" class="note-title" placeholder="Untitled Note" maxlength="500">
+      <div class="format-toolbar" role="toolbar" aria-label="Text formatting">
+        <button data-format="bold" aria-label="Bold selected text"><b>B</b></button><button data-format="italic" aria-label="Italic selected text"><i>I</i></button><button data-format="heading">Heading</button><button data-format="bullet">Bullets</button><button data-format="checklist">Checklist</button><button data-format="number">Numbered</button><button data-format="quote">Quote</button><button data-format="link">Link</button><button data-format="normal">Normal</button>
+      </div>
+      <div id="note-body" aria-label="Note content"></div><div id="note-preview" class="note-preview" hidden></div>
+      <label class="tags-label">Tags <input id="note-tags" placeholder="Add tags, separated by commas"></label>
+      <p id="attachment-note" class="muted" hidden>Attachments and drawings are kept in TaskFlow. Browser edits preserve them.</p>
+      <div class="editor-footer"><span id="save-detail" role="status">Changes save automatically.</span><button id="save-now">Save Now</button><button id="download-draft" hidden>Download Draft</button></div>
+    </div>
+  </section>
+</main>
+<dialog id="conflict-dialog"><h2>This note changed elsewhere.</h2><p>Your draft is safe. Choose which version to keep, or keep both as separate notes.</p><div class="conflict-columns"><section><h3>Your draft</h3><pre id="conflict-local"></pre></section><section><h3>Other version</h3><pre id="conflict-remote"></pre></section></div><div class="dialog-actions"><button id="keep-both" class="primary">Keep Both</button><button id="keep-other">Keep Other Version</button><button id="keep-mine">Keep Mine</button><button id="conflict-cancel">Decide Later</button></div></dialog>
+</body></html>

@@ -1,3 +1,5 @@
+import CryptoKit
+import ImageIO
 import QuickLook
 import MapKit
 import SwiftUI
@@ -153,7 +155,7 @@ struct FlowLayout: Layout {
         var lineHeight: CGFloat = 0
 
         for subview in subviews {
-            let subviewSize = subview.sizeThatFits(.unspecified)
+            let subviewSize = subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
             if lineWidth + subviewSize.width > maxWidth, lineWidth > 0 {
                 size.width = max(size.width, lineWidth - spacing)
                 size.height += lineHeight + spacing
@@ -174,7 +176,7 @@ struct FlowLayout: Layout {
         var lineHeight: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
             if point.x + size.width > bounds.maxX, point.x > bounds.minX {
                 point.x = bounds.minX
                 point.y += lineHeight + spacing
@@ -194,29 +196,28 @@ struct TagSelectionEditor: View {
     let onCreate: (String) -> Void
     @State private var newTag = ""
 
-    /// Rows with checkmarks, like choosing tags in Reminders. Meant to sit inside a Form or List section.
     var body: some View {
-        ForEach(allTagNames, id: \.self) { name in
-            Button {
-                toggle(name)
-            } label: {
-                HStack {
-                    Text("#\(name)").foregroundStyle(.primary)
-                    Spacer()
-                    if contains(name) {
-                        Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold)
+        FlowLayout(spacing: 8) {
+            ForEach(allTagNames, id: \.self) { name in
+                Button { toggle(name) } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: contains(name) ? "checkmark.circle.fill" : "number")
+                        Text(name).fixedSize(horizontal: false, vertical: true)
                     }
+                    .font(.subheadline.weight(contains(name) ? .semibold : .regular))
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .foregroundStyle(colorForTag(name))
+                    .background(colorForTag(name).opacity(contains(name) ? 0.18 : 0.07), in: Capsule())
+                    .overlay(Capsule().stroke(colorForTag(name).opacity(contains(name) ? 0.6 : 0.2)))
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Tag " + name)
+                .accessibilityAddTraits(contains(name) ? .isSelected : [])
             }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(contains(name) ? .isSelected : [])
         }
         TextField("New Tag", text: $newTag)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .submitLabel(.done)
-            .onSubmit(addTag)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+            .submitLabel(.done).onSubmit(addTag)
     }
 
     /// Saved tags plus any already on this item, in alphabetical order.
@@ -306,6 +307,16 @@ struct TodayDashboardView: View {
     @State private var selectedCalendarEvent: CalendarEvent?
     @State private var showsQuickCapture = false
     @State private var captureEventDraft: EventDraft?
+    @State private var choosingPriorities = false
+    @State private var planningOverdue = false
+    @State private var overdueExpanded = false
+    @State private var tomorrowExpanded = false
+    @State private var customizingToday = false
+    @State private var reschedulingTask: TaskItem?
+    @State private var skippedFocusIDs: Set<String> = []
+    @State private var completingFocusTask = false
+    @State private var now = Date()
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var todayEvents: [CalendarEvent] {
         let calendar = Calendar.current
@@ -320,37 +331,13 @@ struct TodayDashboardView: View {
         repository.dueTodayTasks.filter { !$0.isOverdue() }
     }
 
+    private var checklistTasks: [TaskItem] {
+        openTodayTasks.filter { !repository.visibleTodaySections.contains(.timeline) || !$0.hasDueTime }
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
         List {
-            Section {
-                if let event = todayEvents.first(where: { !$0.isAllDay && $0.endDate > Date() }) ?? todayEvents.first(where: { $0.isAllDay }) {
-                    Button {
-                        repository.selectedTaskID = nil
-                        selectedCalendarEvent = event
-                    } label: {
-                        LabeledContent {
-                            Text(event.isAllDay ? "All Day" : event.startDate.formatted(date: .omitted, time: .shortened))
-                        } label: {
-                            Label {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(event.title).foregroundStyle(.primary).lineLimit(1)
-                                    Text(event.isAllDay ? "On your calendar today" : (event.startDate <= Date() ? "Happening now" : "Up next"))
-                                        .font(.subheadline).foregroundStyle(.secondary)
-                                }
-                            } icon: {
-                                Image(systemName: "calendar").foregroundStyle(eventColor(event))
-                            }
-                        }
-                    }
-                    .tint(.primary)
-                }
-            } header: {
-                Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
-            } footer: {
-                Text(summaryText)
-            }
-
             if repository.accessState != .granted {
                 Section {
                     Text(repository.accessState.message).foregroundStyle(.secondary)
@@ -360,9 +347,201 @@ struct TodayDashboardView: View {
                 }
             }
 
-            taskSection("Overdue", tasks: repository.overdueTasks, canDefer: true)
-            taskSection("Today", tasks: openTodayTasks)
+            ForEach(repository.visibleTodaySections) { section in
+                todaySection(section, proxy: proxy)
+            }
+            if repository.visibleTodaySections.allSatisfy({ !sectionHasContent($0) }) {
+                Section {
+                    Text("No items in your selected sections").foregroundStyle(.secondary)
+                    Button("Choose Today’s Sections", systemImage: "slider.horizontal.3") { customizingToday = true }
+                }
+            }
+            if let undo = repository.taskUndo {
+                Section { Button("Undo " + undo.message, systemImage: "arrow.uturn.backward") { Task { await repository.undoLastTaskAction() } }.disabled(repository.isUndoing) }
+            }
+            if let error = repository.errorMessage { Section { Text(error).foregroundStyle(.red) } }
 
+
+        }
+        .listStyle(.insetGrouped)
+        }
+        .taskFlowThemedBackground()
+        .navigationTitle("Today")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Customize Today", systemImage: "slider.horizontal.3") { customizingToday = true }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button("New Task", systemImage: "checklist") {
+                        var draft = repository.makeDraft()
+                        draft.dueDate = Calendar.current.startOfDay(for: Date())
+                        editorDraft = draft
+                    }
+                    Button("New Event", systemImage: "calendar.badge.plus") { captureEventDraft = repository.makeEventDraft() }
+                    Button("Quick Capture", systemImage: "text.cursor") { showsQuickCapture = true }
+                } label: {
+                    Label("Add", systemImage: "plus")
+                } primaryAction: {
+                    showsQuickCapture = true
+                }
+                .popoverTip(AddMenuTip())
+            }
+        }
+        .sheet(item: $reschedulingTask) { task in
+            BulkRescheduleTasksSheet(selectedCount: 1, initialTask: task) { date, hasTime in
+                Task { await repository.setDueDate(date, hasDueTime: hasTime, forTaskIDs: [task.id]) }
+            }
+        }
+        .sheet(isPresented: $customizingToday) { TodaySectionsEditor(repository: repository) }
+        .sheet(isPresented: $choosingPriorities) { TodayPriorityPicker(repository: repository) }
+        .sheet(isPresented: $planningOverdue) { TodayOverduePlanner(repository: repository) }
+        .task {
+            while !Task.isCancelled {
+                now = Date()
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            }
+        }
+        .sheet(isPresented: $showsQuickCapture) {
+            QuickCaptureView(repository: repository, onTask: { draft in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editorDraft = draft }
+            }, onEvent: { draft in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { captureEventDraft = draft }
+            })
+        }
+        .sheet(item: $captureEventDraft) { draft in
+            CalendarEventEditorView(repository: repository, draft: draft)
+        }
+        .sheet(item: $selectedCalendarEvent) { event in
+            CalendarEventDetailView(repository: repository, event: event,
+                                    color: repository.eventCalendars.first { $0.id == event.calendarID }?.color ?? .blue)
+        }
+    }
+
+    private func sectionHasContent(_ section: TodayDashboardSection) -> Bool {
+        switch section {
+        case .summary, .suggested, .focus, .timeline: true
+        case .priorities, .tasks, .capture: repository.accessState == .granted
+        case .overdue: !repository.overdueTasks.isEmpty
+        case .calendar: !todayEvents.isEmpty
+        case .tomorrow: repository.upcomingTasks.contains { $0.dueDate.map { Calendar.current.isDateInTomorrow($0) } == true }
+        }
+    }
+
+    @ViewBuilder private func todaySection(_ section: TodayDashboardSection, proxy: ScrollViewProxy) -> some View {
+        switch section {
+        case .summary:
+            Section {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(spacing: 8) { summaryButtons(proxy) }
+                } else {
+                    HStack(spacing: 8) { summaryButtons(proxy) }
+                }
+                Button {
+                    revealSection(.timeline, anchor: "today-timeline", proxy: proxy)
+                } label: {
+                    if repository.eventAccessState == .granted {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let entries = TodayPlanning.timeline(tasks: repository.tasks, events: repository.calendarEvents, now: context.date)
+                            let seconds = TodayPlanning.availableSeconds(entries, now: context.date)
+                            Label {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Available time today").foregroundStyle(.secondary)
+                                    Text(TodayPlanning.countdownText(seconds: seconds))
+                                        .monospacedDigit().fontWeight(.semibold)
+                                }
+                            } icon: { Image(systemName: "clock") }
+                            .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Available time today")
+                            .accessibilityValue("\(seconds / 3600) hours, \((seconds % 3600) / 60) minutes, \(seconds % 60) seconds")
+                        }
+                    } else {
+                        Label("Connect Calendar to calculate available time", systemImage: "clock")
+                            .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                    }
+                }.buttonStyle(.plain)
+                eventSpotlight
+            } header: {
+                Text(now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+            }
+
+        case .focus:
+            Section("Focus Next") {
+                if let task = focusTask {
+                    Button(task.title) { repository.openTask(id: task.id) }.foregroundStyle(.primary)
+                    VStack(alignment: .leading, spacing: 12) { focusActions(task) }
+                        .labelStyle(.titleAndIcon)
+                        .buttonStyle(.borderless)
+                        .disabled(completingFocusTask)
+                } else {
+                    Text("No actionable tasks to focus on").foregroundStyle(.secondary)
+                }
+            }
+        case .timeline:
+            Section {
+                ForEach(timelineEntries) { entry in
+                    Button {
+                        if let task = entry.task { repository.openTask(id: task.id) }
+                        if let event = entry.event { selectedCalendarEvent = event }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(entry.title, systemImage: entry.task == nil ? "calendar" : "checklist").foregroundStyle(.primary)
+                            Text(entry.start.formatted(date: .omitted, time: .shortened) + " – " + entry.end.formatted(date: .omitted, time: .shortened)).font(.caption)
+                            if entry.estimated { Text("Estimated 30-minute task block").font(.caption).foregroundStyle(.secondary) }
+                            if TodayPlanning.conflicts(entry, entries: timelineEntries) { Label("Overlapping schedule", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
+                        }.fixedSize(horizontal: false, vertical: true)
+                    }.buttonStyle(.plain)
+                }
+                if timelineEntries.isEmpty { Text("No timed tasks or events today").foregroundStyle(.secondary) }
+                if repository.eventAccessState == .granted {
+                    ForEach(availableGaps) { gap in
+                        Label("Free " + gap.start.formatted(date: .omitted, time: .shortened) + " – " + gap.end.formatted(date: .omitted, time: .shortened) + " · " + gap.durationText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                } else { Text("Connect Calendar to include events in available time.").foregroundStyle(.secondary) }
+            } header: { Text("Combined Timeline") } footer: { Text("Task blocks start at their due time. Missing estimates use 30 minutes. Free time covers the rest of today; all-day events do not reserve time.") }
+            .id("today-timeline")
+
+        case .priorities:
+            if repository.accessState == .granted {
+                Section {
+                    if repository.todayPriorityTasks.isEmpty {
+                        Button("Choose up to three priorities", systemImage: "star") { choosingPriorities = true }
+                    } else {
+                        ForEach(repository.todayPriorityTasks) { dashboardTaskRow($0) }
+                        let finished = repository.todayPriorityTasks.filter(\.isCompleted).count
+                        ProgressView(value: Double(finished), total: Double(repository.todayPriorityTasks.count))
+                            .accessibilityLabel("Today priorities")
+                            .accessibilityValue("\(finished) of \(repository.todayPriorityTasks.count) finished")
+                        Text("\(finished) of \(repository.todayPriorityTasks.count) finished").font(.caption).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    HStack { Text("Top 3 Today"); Spacer(); Button("Manage") { choosingPriorities = true }.textCase(nil) }
+                } footer: { Text("Your priorities for today. Due dates stay as you set them.") }
+            }
+
+        case .overdue:
+            if !repository.overdueTasks.isEmpty {
+                Section {
+                    DisclosureGroup("\(repository.overdueTasks.count) overdue tasks", isExpanded: $overdueExpanded) {
+                        ForEach(repository.overdueTasks.sorted { ($0.dueDate ?? .distantPast) < ($1.dueDate ?? .distantPast) }) {
+                            dashboardTaskRow($0, canCommit: true, canDefer: true)
+                        }
+                    }
+                    Button("Plan Overdue Tasks", systemImage: "calendar.badge.clock") { planningOverdue = true }
+                } header: { Text("Overdue") }
+                .id("today-overdue")
+            }
+        case .tasks:
+            taskSection(repository.visibleTodaySections.contains(.timeline) ? "Untimed Tasks" : "Today", tasks: checklistTasks).id("today-tasks")
+            if repository.accessState == .granted, checklistTasks.isEmpty {
+                Section {
+                    Label(!openTodayTasks.isEmpty ? "Timed tasks appear in your timeline" : TodayPlanning.emptyTaskMessage(repository.tasks, now: now), systemImage: "checkmark.circle")
+                        .foregroundStyle(.secondary)
+                }.id("today-tasks")
+            }
+
+        case .calendar:
             if !todayEvents.isEmpty {
                 Section("Calendar") {
                     ForEach(todayEvents, id: \.occurrenceKey) { event in
@@ -391,14 +570,24 @@ struct TodayDashboardView: View {
                         }
                         .tint(.primary)
                     }
-                }
+                }.id("today-events")
             }
 
+        case .tomorrow:
             let tomorrowTasks = repository.upcomingTasks.filter { task in
                 guard let due = task.dueDate else { return false }
                 return Calendar.current.isDateInTomorrow(due)
             }
-            taskSection("Tomorrow", tasks: tomorrowTasks, canCommit: true)
+            if !tomorrowTasks.isEmpty {
+                Section("Tomorrow") {
+                    DisclosureGroup("\(tomorrowTasks.count) \(tomorrowTasks.count == 1 ? "task" : "tasks")", isExpanded: $tomorrowExpanded) {
+                        ForEach(tomorrowTasks.sorted { ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture) }) {
+                            dashboardTaskRow($0, canCommit: true)
+                        }
+                    }
+                }
+            }
+        case .suggested:
             if !suggestedTasks.isEmpty || !repository.overdueTasks.isEmpty {
                 TipView(PlanTodayTip())
                     .listRowBackground(Color.clear)
@@ -407,6 +596,12 @@ struct TodayDashboardView: View {
             taskSection("Suggested", tasks: suggestedTasks, canCommit: true,
                         footer: "Flagged and high-priority tasks that aren\u{2019}t due today. Swipe right to add one to Today.")
 
+            if suggestedTasks.isEmpty {
+                Section {
+                    Label("No actionable suggestions", systemImage: "checkmark.circle").foregroundStyle(.secondary)
+                } header: { Text("Suggested") } footer: { Text("Suggestions use flagged or high-priority tasks. Waiting and blocked tasks are excluded.") }
+            }
+        case .capture:
             if repository.accessState == .granted {
                 Section {
                     InlineNewTaskRow(repository: repository, defaultDue: .today, onShowDetails: { editorDraft = $0 }, onAdded: {
@@ -415,53 +610,85 @@ struct TodayDashboardView: View {
                 } footer: {
                     Text("New tasks here are due today.")
                 }
-            }
-        }
-        .listStyle(.insetGrouped)
-        }
-        .taskFlowThemedBackground()
-        .navigationTitle("Today")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button("New Task", systemImage: "checklist") {
-                        var draft = repository.makeDraft()
-                        draft.dueDate = Calendar.current.startOfDay(for: Date())
-                        editorDraft = draft
-                    }
-                    Button("New Event", systemImage: "calendar.badge.plus") { captureEventDraft = repository.makeEventDraft() }
-                    Button("Quick Capture", systemImage: "text.cursor") { showsQuickCapture = true }
-                } label: {
-                    Label("Add", systemImage: "plus")
-                } primaryAction: {
-                    var draft = repository.makeDraft()
-                    draft.dueDate = Calendar.current.startOfDay(for: Date())
-                    editorDraft = draft
-                }
-                .popoverTip(AddMenuTip())
-            }
-        }
-        .sheet(isPresented: $showsQuickCapture) {
-            QuickCaptureView(repository: repository, onTask: { draft in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editorDraft = draft }
-            }, onEvent: { draft in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { captureEventDraft = draft }
-            })
-        }
-        .sheet(item: $captureEventDraft) { draft in
-            CalendarEventEditorView(repository: repository, draft: draft)
-        }
-        .sheet(item: $selectedCalendarEvent) { event in
-            CalendarEventDetailView(repository: repository, event: event,
-                                    color: repository.eventCalendars.first { $0.id == event.calendarID }?.color ?? .blue)
-        }
+            }        }
     }
 
-    private var summaryText: String {
-        var parts = ["\(openTodayTasks.count) due today"]
-        if !repository.overdueTasks.isEmpty { parts.append("\(repository.overdueTasks.count) overdue") }
-        parts.append("\(todayEvents.count) event\(todayEvents.count == 1 ? "" : "s")")
-        return parts.joined(separator: " · ")
+    @ViewBuilder private func summaryButtons(_ proxy: ScrollViewProxy) -> some View {
+        summaryButton("Due Today", count: openTodayTasks.count) { revealSection(.tasks, anchor: "today-tasks", proxy: proxy) }
+        summaryButton("Overdue", count: repository.overdueTasks.count) { overdueExpanded = true; revealSection(.overdue, anchor: "today-overdue", proxy: proxy) }
+        summaryButton("Events", count: todayEvents.filter { $0.endDate > now }.count) { revealSection(.calendar, anchor: "today-events", proxy: proxy) }
+    }
+    private var timelineEntries: [TodayPlanning.TimelineEntry] {
+        TodayPlanning.timeline(tasks: repository.tasks, events: todayEvents, now: now)
+    }
+    private var availableGaps: [DayTimeGap] { TodayPlanning.gaps(timelineEntries, now: now) }
+    private var focusTask: TaskItem? {
+        let candidates = repository.tasks.filter { task in
+            repository.isActionableToday(task) && (repository.isTodayPriority(task) || task.dueDate == nil || task.dueDate! < Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now))!)
+        }
+        let remaining = candidates.filter { !skippedFocusIDs.contains($0.id) }
+        return (remaining.isEmpty ? candidates : remaining).sorted {
+            let a = TodayPlanning.focusScore($0, pinned: repository.isTodayPriority($0), availableMinutes: repository.eventAccessState == .granted ? availableGaps.first?.minutes : nil, now: now)
+            let b = TodayPlanning.focusScore($1, pinned: repository.isTodayPriority($1), availableMinutes: repository.eventAccessState == .granted ? availableGaps.first?.minutes : nil, now: now)
+            return a == b ? $0.id < $1.id : a > b
+        }.first
+    }
+    @ViewBuilder private func focusActions(_ task: TaskItem) -> some View {
+        Button(completingFocusTask ? "Completing…" : "Mark Complete", systemImage: "checkmark") {
+            guard !completingFocusTask else { return }
+            completingFocusTask = true
+            Task {
+                await repository.toggleCompletion(for: task)
+                completingFocusTask = false
+            }
+        }
+        Button("Choose Another", systemImage: "arrow.triangle.2.circlepath") {
+            if skippedFocusIDs.contains(task.id) { skippedFocusIDs = [task.id] } else { skippedFocusIDs.insert(task.id) }
+        }
+    }
+    private func revealSection(_ section: TodayDashboardSection, anchor: String, proxy: ScrollViewProxy) {
+        repository.setTodaySectionVisible(section, true)
+        DispatchQueue.main.async { withAnimation { proxy.scrollTo(anchor, anchor: .top) } }
+    }
+    private func summaryButton(_ title: String, count: Int, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    HStack(spacing: 10) {
+                        Text(count, format: .number).font(.title3.bold()).monospacedDigit()
+                        Text(title).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                } else {
+                    VStack(spacing: 3) {
+                        Text(count, format: .number).font(.title3.bold()).monospacedDigit()
+                        Text(title).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .padding(6).background(repository.appTheme.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }.buttonStyle(.plain).accessibilityLabel("\(count) \(title)")
+    }
+    @ViewBuilder private var eventSpotlight: some View {
+        switch TodayPlanning.spotlight(todayEvents, now: now) {
+        case .now(let event): spotlightCard(event, status: "Happening Now", time: "Until " + event.endDate.formatted(date: .omitted, time: .shortened))
+        case .next(let event): spotlightCard(event, status: "Up Next", time: event.startDate.formatted(date: .omitted, time: .shortened))
+        case .allDay(let event): spotlightCard(event, status: "On Your Calendar", time: "All Day")
+        case .finished: Label("No more timed events today", systemImage: "calendar.badge.checkmark").foregroundStyle(.secondary)
+        case .empty:
+            if repository.eventAccessState == .granted { Label("Nothing scheduled on your calendar today", systemImage: "calendar").foregroundStyle(.secondary) }
+            else { Button("Connect Calendar", systemImage: "calendar") { Task { await repository.requestEventCalendarAccess() } } }
+        }
+    }
+    private func spotlightCard(_ event: CalendarEvent, status: String, time: String) -> some View {
+        Button { repository.selectedTaskID = nil; selectedCalendarEvent = event } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                Label(status, systemImage: "calendar").font(.caption.weight(.semibold)).foregroundStyle(eventColor(event))
+                Text(event.title).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                Text(time).font(.subheadline).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.plain)
     }
 
     private func eventColor(_ event: CalendarEvent) -> Color {
@@ -472,7 +699,7 @@ struct TodayDashboardView: View {
     private var suggestedTasks: [TaskItem] {
         let calendar = Calendar.current
         return repository.tasks.filter { task in
-            guard !task.isCompleted, task.isFlagged || task.priority == .high else { return false }
+            guard repository.isActionableToday(task), task.isFlagged || task.priority == .high else { return false }
             guard let due = task.dueDate else { return true }
             return !calendar.isDateInToday(due) && !calendar.isDateInTomorrow(due) && !task.isOverdue()
         }
@@ -482,6 +709,16 @@ struct TodayDashboardView: View {
         if !tasks.isEmpty {
             Section {
                 ForEach(tasks.sorted { ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture) }) { task in
+                    dashboardTaskRow(task, canCommit: canCommit, canDefer: canDefer)
+                }
+            } header: {
+                Text(title)
+            } footer: {
+                if let footer { Text(footer) }
+            }
+        }
+    }
+    private func dashboardTaskRow(_ task: TaskItem, canCommit: Bool = false, canDefer: Bool = false) -> some View {
                     TaskRowView(task: task, subtasks: [], isSelected: repository.selectedTaskID == task.id,
                                 listColor: repository.lists.first { $0.id == task.listID }?.color ?? repository.appTheme.primary,
                                 tagColor: repository.color(forTag:),
@@ -489,7 +726,7 @@ struct TodayDashboardView: View {
                         .swipeActions(edge: .leading) {
                             if canCommit {
                                 Button {
-                                    Task { await repository.setDueDate(Calendar.current.startOfDay(for: Date()), for: task) }
+                                    Task { await repository.setDueDate(Calendar.current.startOfDay(for: Date()), hasDueTime: false, forTaskIDs: [task.id]) }
                                 } label: {
                                     Label("Today", systemImage: "sun.max")
                                 }
@@ -503,6 +740,8 @@ struct TodayDashboardView: View {
                             .tint(.green)
                         }
                         .swipeActions {
+                            Button("Reschedule", systemImage: "calendar") { reschedulingTask = task }
+                                .tint(.blue)
                             Button(role: .destructive) {
                                 Task { await repository.deleteTask(task) }
                             } label: {
@@ -511,7 +750,7 @@ struct TodayDashboardView: View {
                             if canDefer {
                                 Button {
                                     let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date())) ?? Date()
-                                    Task { await repository.setDueDate(tomorrow, for: task) }
+                                    Task { await repository.setDueDate(tomorrow, hasDueTime: false, forTaskIDs: [task.id]) }
                                 } label: {
                                     Label("Tomorrow", systemImage: "arrow.turn.up.right")
                                 }
@@ -524,14 +763,8 @@ struct TodayDashboardView: View {
                             }
                             .tint(.orange)
                         }
-                }
-            } header: {
-                Text(title)
-            } footer: {
-                if let footer { Text(footer) }
-            }
-        }
     }
+
 }
 
 
@@ -655,6 +888,17 @@ struct PlanTodayTip: Tip {
 }
 
 
+struct EditableMediaLink: Identifiable {
+    var id = UUID()
+    var provider = ""
+    var url = ""
+    var region = ""
+    var note = ""
+    var link: ReadingMedia.WatchLink {
+        .init(provider: provider.trimmingCharacters(in: .whitespacesAndNewlines), url: url.trimmingCharacters(in: .whitespacesAndNewlines), region: region.isEmpty ? nil : region, note: note.isEmpty ? nil : note)
+    }
+}
+
 struct SpecializedTaskEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var repository: TaskRepository
@@ -663,6 +907,10 @@ struct SpecializedTaskEditor: View {
     @State private var details = SpecializedTaskDetails()
     @State private var saving = false
     @State private var initialized = false
+    @State private var mediaTitle = ""
+    @State private var mediaNote = ""
+    @State private var mediaTags = ""
+    @State private var mediaLinks: [EditableMediaLink] = []
     @State private var location: TaskLocation?
     @State private var originalLocation: TaskLocation?
     @State private var locationQuery = ""
@@ -674,6 +922,56 @@ struct SpecializedTaskEditor: View {
     }
     var body: some View {
         Form {
+            if type == .reading {
+                Section("Streaming Service (optional)") {
+                    Picker("Service", selection: field("Streaming Service")) {
+                        Text("Not Set").tag("")
+                        ForEach(Array(Set(repository.streamingServiceChoices + [details.fields["Streaming Service"] ?? ""]).filter { !$0.isEmpty }).sorted(), id: \.self) { Text($0).tag($0) }
+                    }
+                    TextField("Other service", text: field("Streaming Service"))
+                }
+                Section("Title & Notes") {
+                    TextField("Title", text: $mediaTitle, axis: .vertical)
+                    TextField("Notes", text: $mediaNote, axis: .vertical).lineLimit(2...6)
+                }
+                Section {
+                    TextField("Tags separated by commas", text: $mediaTags, axis: .vertical).textInputAutocapitalization(.never)
+                    let suggestions = ReadingMedia.suggestedTags(details.fields.merging(["Watch Links": ReadingMedia.encodeLinks(mediaLinks.map(\.link))]) { _, new in new })
+                    ForEach(suggestions, id: \.self) { tag in
+                        Toggle("#" + tag, isOn: Binding(get: { ReadingMedia.tagNames(mediaTags).contains { $0.localizedCaseInsensitiveCompare(tag) == .orderedSame } }, set: { included in
+                            var tags = ReadingMedia.tagNames(mediaTags)
+                            if included { tags.append(tag) } else { tags.removeAll { $0.localizedCaseInsensitiveCompare(tag) == .orderedSame } }
+                            mediaTags = Array(Set(tags)).sorted().joined(separator: ", ")
+                        }))
+                    }
+                } header: { Text("Tags") } footer: { Text("Type and service tags are added on capture. Genre suggestions come from the page; you choose which to keep.") }
+                if details.fields["Local Preview"] != nil || !(details.fields["Thumbnail URL"] ?? "").isEmpty {
+                    Section {
+                        Button("Remove Preview", role: .destructive) {
+                            details.fields.removeValue(forKey: "Local Preview")
+                            details.fields["Thumbnail URL"] = ""
+                            details.fields["Suppress Preview"] = "true"
+                        }
+                    }
+                }
+                Section {
+                    ForEach($mediaLinks) { $link in
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Service or source", text: $link.provider)
+                            ListURLField(title: "Link", value: $link.url)
+                            TextField("Country (optional)", text: $link.region)
+                            TextField("Subscription, rental, or availability note", text: $link.note, axis: .vertical)
+                            Button("Remove Link", role: .destructive) { mediaLinks.removeAll { $0.id == link.id } }
+                        }
+                    }
+                    Button("Add Watch Link", systemImage: "link.badge.plus") { mediaLinks.append(EditableMediaLink()) }
+                    Menu("Choose Service Name") {
+                        ForEach(repository.streamingServiceChoices, id: \.self) { service in
+                            Button(service) { mediaLinks.append(EditableMediaLink(provider: service)) }
+                        }
+                    }
+                } header: { Text(ReadingMedia.action(for: ReadingMedia.displayFormat(details.fields)) == "Watch" ? "Where to Watch · Saved Links" : "Source Links") } footer: { Text("These are saved links, not verified availability. Add a country or access note when useful. Clear Source Link as well to remove the original capture link.") }
+            }
             Section {
                 ForEach(type.fields.filter { !["Follow-up Date", "Essential", "Next Action", "Required", "Rating", "Shopping List ID"].contains($0) && !(type == .appointments && ["Preparation", "Questions", "Outcome"].contains($0)) && repository.listProfile(task.listID).settings["Hidden Field " + $0] != "true" }, id: \.self) { key in
                     if ["Renewal Date", "Notice Date", "Cancellation Deadline"].contains(key) {
@@ -681,6 +979,20 @@ struct SpecializedTaskEditor: View {
                         if !(details.fields[key] ?? "").isEmpty {
                             DatePicker(key, selection: Binding(get: { SpecializedTaskDetails.dateValue(details.fields[key] ?? "") ?? Date() }, set: { details.fields[key] = SpecializedTaskDetails.dateText($0) }), displayedComponents: .date)
                         }
+                    } else if type == .reading, key == "Format" {
+                        Picker("Media Type", selection: field(key)) {
+                            Text("Not Set").tag("")
+                            ForEach(ReadingMedia.formats, id: \.self) { Text($0).tag($0) }
+                            if let existing = details.fields[key], !existing.isEmpty, !ReadingMedia.formats.contains(existing) { Text(existing).tag(existing) }
+                        }
+                    } else if ListFieldNumber.keys.contains(key) {
+                        ListNumberField(title: key, value: field(key), integer: ListFieldNumber.integer(key), minimum: ListFieldNumber.minimum(key))
+                    } else if ["Room", "Provider", "Milestone", "Section", "Category", "Destination", "Contact"].contains(key) {
+                        NavigationLink {
+                            ListFieldPicker(title: key, value: field(key), choices: repository.listFieldChoices(key, listID: task.listID))
+                        } label: { LabeledContent(key, value: details.fields[key].flatMap { $0.isEmpty ? nil : $0 } ?? "Not Set") }
+                    } else if ["Source Link", "Thumbnail URL", "Payment Link"].contains(key) {
+                        ListURLField(title: key, value: field(key))
                     } else {
                         TextField(key, text: field(key), axis: .vertical).lineLimit(1...5)
                     }
@@ -696,11 +1008,10 @@ struct SpecializedTaskEditor: View {
                     }
                 }
                 if type == .appointments {
-                    Picker("Linked Event", selection: field("Event ID")) {
-                        Text("None").tag("")
-                        ForEach(repository.calendarEvents, id: \.occurrenceKey) { event in
-                            Text(event.title + " · " + event.startDate.formatted(date: .abbreviated, time: .shortened)).tag(event.id)
-                        }
+                    NavigationLink {
+                        EventLinkPicker(repository: repository, selection: field("Event ID"))
+                    } label: {
+                        LabeledContent("Linked Event", value: repository.calendarEvents.first { $0.id == details.fields["Event ID"] }?.title ?? "Choose Event")
                     }
                     Toggle("Follow-up Reminder", isOn: Binding(get: { !(details.fields["Follow-up Date"] ?? "").isEmpty }, set: { details.fields["Follow-up Date"] = $0 ? SpecializedTaskDetails.dateText(Date()) : "" }))
                     if !(details.fields["Follow-up Date"] ?? "").isEmpty {
@@ -723,7 +1034,7 @@ struct SpecializedTaskEditor: View {
                         Text("Creates a new reminder after completion. Disable native repeat to use this schedule.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-            } header: { Text(type.rawValue) } footer: { Text("These optional details are saved in TaskFlow. Changing list type keeps them.") }
+            } header: { Text(type.rawValue) } footer: { Text(type.syncExplanation) }
             if type == .errands { errandLocationSection }
             if type == .appointments {
                 if repository.listProfile(task.listID).settings["Hidden Field Preparation"] != "true" { Section("Before · Preparation") { TextField("One preparation step per line", text: field("Preparation"), axis: .vertical).lineLimit(2...6) } }
@@ -732,15 +1043,23 @@ struct SpecializedTaskEditor: View {
             }
         }
         .taskFlowThemedBackground()
-        .navigationTitle("Specialized Details")
+        .navigationTitle(type == .reading ? "Edit Media" : type.detailsTitle)
+        .navigationBarTitleDisplayMode(type == .reading ? .inline : .automatic)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") {
             saving = true
             Task {
                 var saved = details
+                for key in ListFieldNumber.keys where !(saved.fields[key] ?? "").isEmpty {
+                    let raw = saved.fields[key] ?? ""
+                    if let number = Double(raw.replacingOccurrences(of: Locale.current.decimalSeparator ?? ".", with: ".")), number.isFinite { saved.fields[key] = ShoppingQuantity.text(number) }
+                }
                 if type == .errands, let location, (saved.fields["Destination"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     saved.fields["Destination"] = location.displayTitle
                 }
-                var succeeded = await repository.saveSpecializedDetails(saved, for: task, type: type)
+                if type == .reading { saved.fields["Watch Links"] = ReadingMedia.encodeLinks(mediaLinks.map(\.link)) }
+                var succeeded = type == .reading
+                    ? await repository.saveMediaItem(saved, title: mediaTitle, note: mediaNote, tags: ReadingMedia.tagNames(mediaTags), for: task)
+                    : await repository.saveSpecializedDetails(saved, for: task, type: type)
                 if succeeded, type == .errands, location != originalLocation {
                     // The place is saved on the reminder, where Reminders delivers its arrival alert.
                     var draft = TaskDraft(task: repository.tasks.first { $0.id == task.id } ?? task)
@@ -750,14 +1069,40 @@ struct SpecializedTaskEditor: View {
                 if succeeded { dismiss() }
                 saving = false
             }
-        }.disabled(saving || searchingLocation) } }
+        }.disabled(saving || searchingLocation || !validFields) } }
         .onAppear {
             guard !initialized else { return }
             initialized = true
             details = repository.specializedDetails(task)
+            if type == .reading {
+                mediaTitle = task.title
+                mediaNote = task.notes
+                mediaTags = task.tags.joined(separator: ", ")
+                mediaLinks = ReadingMedia.watchLinks(details.fields).map { EditableMediaLink(provider: $0.provider, url: $0.url, region: $0.region ?? "", note: $0.note ?? "") }
+                details.fields["Format"] = ReadingMedia.displayFormat(details.fields)
+            }
             location = (repository.tasks.first { $0.id == task.id } ?? task).location
             originalLocation = location
         }
+    }
+
+    private var validFields: Bool {
+        if type == .reading {
+            guard !mediaTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            for link in mediaLinks {
+                guard !link.provider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let url = URL(string: link.url), ReadingMedia.isWebURL(url) else { return false }
+            }
+            for key in ["Source Link", "Thumbnail URL"] {
+                let raw = details.fields[key] ?? ""
+                if !raw.isEmpty, URL(string: raw).map(ReadingMedia.isWebURL) != true { return false }
+            }
+        }
+        for key in ListFieldNumber.keys where type.fields.contains(key) && repository.listProfile(task.listID).settings["Hidden Field " + key] != "true" {
+            let raw = details.fields[key] ?? ""
+            if !raw.isEmpty, ListFieldNumber.parse(raw, key: key) == nil { return false }
+        }
+        return true
     }
 
     @ViewBuilder private var errandLocationSection: some View {
@@ -819,10 +1164,23 @@ struct SpecializedTaskEditor: View {
 }
 
 struct SpecializedTaskListView: View {
+    @State private var artworkItem: TaskItem?
+    @State private var showingListCleanup = false
+    @State private var trackedShow: TaskItem?
     @Bindable var repository: TaskRepository
     let listID: String
     var viewMode: TaskRepository.TaskViewMode = .list
     @Binding var editorDraft: TaskDraft?
+    @State private var pendingFilterTool: String?
+    @State private var showingMediaFilters = false
+    @State private var mediaProviderFilter = ""
+    @State private var mediaFormatFilter = ""
+    @State private var showingFilters = false
+    @State private var selectingItems = false
+    @State private var selectedIDs: Set<String> = []
+    @State private var showingBulkEditor = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var recentPurchase: SpecializedListTemplate.Item?
     @State private var shoppingMode = false
     @State private var showFavorites = false
     @State private var showPreviousRuns = false
@@ -842,6 +1200,7 @@ struct SpecializedTaskListView: View {
     @State private var showingReadingCapture = false
     @State private var checklistTask: TaskItem?
     @State private var remainingOnly = false
+    @State private var watchSort = "Recently Watched"
     @State private var sortByName = false
     @State private var completedExpanded = false
     @State private var pendingClearIDs: Set<String> = []
@@ -858,10 +1217,13 @@ struct SpecializedTaskListView: View {
     @Environment(\.openURL) private var openURL
     private func persistPreferences() {
         var profile = repository.listProfile(listID)
+        profile.settings["Media Provider Filter"] = mediaProviderFilter
+        profile.settings["Media Format Filter"] = mediaFormatFilter
         profile.settings["Shopping Mode"] = String(shoppingMode)
         profile.settings["Group Store"] = String(groupByStore)
         profile.settings["Store Filter"] = storeFilter
         profile.settings["Favorites Only"] = String(showFavorites)
+        profile.settings["Watch Sort"] = watchSort
         profile.settings["Sort Name"] = String(sortByName)
         profile.settings["Completed Expanded"] = String(completedExpanded)
         profile.settings["Collapsed"] = (try? String(data: JSONEncoder().encode(Array(collapsed)), encoding: .utf8)) ?? "[]"
@@ -869,8 +1231,25 @@ struct SpecializedTaskListView: View {
     }
     private var type: SpecializedListType { repository.listProfile(listID).type }
     private var items: [TaskItem] {
-        let values = repository.rootTasks.filter { $0.listID == listID && (!showFavorites || repository.specializedDetails($0).isFavorite) && (showPreviousRuns || repository.listProfile(listID).settings["Current Run"] == nil || repository.specializedDetails($0).fields["Run ID"] == repository.listProfile(listID).settings["Current Run"]) }
-        let visible = values.filter { !$0.isCompleted && (!remainingOnly || !["Packed", "Finished", "Paid"].contains(repository.specializedDetails($0).fields["Stage"] ?? "")) }
+        let roots = repository.rootTasks
+        let rootIDs = Set(roots.map(\.id))
+        let finishedWatchItems = type == .reading ? repository.tasks.filter {
+            $0.parentID == nil && $0.isCompleted && !rootIDs.contains($0.id) && ReadingMedia.action(for: ReadingMedia.displayFormat(repository.specializedDetails($0).fields)) == "Watch"
+        } : []
+        let values = (roots + finishedWatchItems).filter { $0.listID == listID && (type != .shopping || repository.shoppingTask($0, matchesStore: storeFilter)) && (type != .shopping || !showFavorites || repository.specializedDetails($0).isFavorite) && (showPreviousRuns || repository.listProfile(listID).settings["Current Run"] == nil || repository.specializedDetails($0).fields["Run ID"] == repository.listProfile(listID).settings["Current Run"]) }
+        let visible = values.filter { mediaMatches($0) && (!$0.isCompleted || (type == .reading && ReadingMedia.action(for: ReadingMedia.displayFormat(repository.specializedDetails($0).fields)) == "Watch")) && (!remainingOnly || !["Packed", "Finished", "Paid"].contains(repository.specializedDetails($0).fields["Stage"] ?? "")) }
+        if type == .reading {
+            return visible.sorted { lhs, rhs in
+                let left = repository.specializedDetails(lhs).fields
+                let right = repository.specializedDetails(rhs).fields
+                if watchSort != "Title" {
+                    let a = watchSort == "New Releases" ? ReadingMedia.newestUnwatchedRelease(left) : left["Last Watched At"].flatMap { ISO8601DateFormatter().date(from: $0) }
+                    let b = watchSort == "New Releases" ? ReadingMedia.newestUnwatchedRelease(right) : right["Last Watched At"].flatMap { ISO8601DateFormatter().date(from: $0) }
+                    if a != b { return (a ?? .distantPast) > (b ?? .distantPast) }
+                }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        }
         if sortByName { return visible.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending } }
         if type == .routines { return visible.sorted { (Int(repository.specializedDetails($0).fields["Step Order"] ?? "") ?? Int.max) < (Int(repository.specializedDetails($1).fields["Step Order"] ?? "") ?? Int.max) } }
         return visible
@@ -883,7 +1262,55 @@ struct SpecializedTaskListView: View {
     }
     private var progressTasks: [TaskItem] {
         repository.tasks.filter { task in
-            task.listID == listID && task.parentID == nil && (type != .shopping || repository.shoppingTask(task, matchesStore: storeFilter)) && (showPreviousRuns || repository.listProfile(listID).settings["Current Run"] == nil || repository.specializedDetails(task).fields["Run ID"] == repository.listProfile(listID).settings["Current Run"])
+            task.listID == listID && task.parentID == nil && mediaMatches(task) && (type != .shopping || repository.shoppingTask(task, matchesStore: storeFilter)) && (showPreviousRuns || repository.listProfile(listID).settings["Current Run"] == nil || repository.specializedDetails(task).fields["Run ID"] == repository.listProfile(listID).settings["Current Run"])
+        }
+    }
+    private func mediaMatches(_ task: TaskItem) -> Bool {
+        guard type == .reading else { return true }
+        let fields = repository.specializedDetails(task).fields
+        return fields["Merged Into"] == nil && (mediaFormatFilter.isEmpty || ReadingMedia.displayFormat(fields) == mediaFormatFilter) && (mediaProviderFilter.isEmpty || fields["Streaming Service"]?.localizedCaseInsensitiveCompare(mediaProviderFilter) == .orderedSame || ReadingMedia.watchLinks(fields).contains { $0.provider.localizedCaseInsensitiveCompare(mediaProviderFilter) == .orderedSame })
+    }
+    private var mediaProviders: [String] {
+        Array(Set(repository.rootTasks.filter { $0.listID == listID && repository.specializedDetails($0).fields["Merged Into"] == nil }.flatMap { ReadingMedia.watchLinks(repository.specializedDetails($0).fields).map(\.provider) + [repository.specializedDetails($0).fields["Streaming Service"] ?? ""] })).filter { !$0.isEmpty }.sorted()
+    }
+    @ViewBuilder private func readingHeader(_ progress: [TaskItem]) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("\(progress.filter { !$0.isCompleted }.count) saved").foregroundStyle(.secondary)
+                Button("Save Link", systemImage: "link.badge.plus") { showingReadingCapture = true }.labelStyle(.titleAndIcon)
+                Button("Filters", systemImage: "line.3.horizontal.decrease") { showingMediaFilters = true }.labelStyle(.titleAndIcon)
+            }.font(.subheadline).buttonStyle(.borderless)
+        } else {
+            HStack {
+                Text("\(progress.filter { !$0.isCompleted }.count) saved").foregroundStyle(.secondary).fixedSize()
+                Spacer(minLength: 8)
+                Button("Save Link", systemImage: "link.badge.plus") { showingReadingCapture = true }.labelStyle(.titleAndIcon).fixedSize()
+                Button { showingMediaFilters = true } label: { Image(systemName: mediaProviderFilter.isEmpty && mediaFormatFilter.isEmpty ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") }.accessibilityLabel("Filter media")
+            }.font(.subheadline).buttonStyle(.borderless)
+        }
+        if !mediaProviderFilter.isEmpty || !mediaFormatFilter.isEmpty {
+            HStack {
+                Text([mediaProviderFilter, mediaFormatFilter].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear Filters") { mediaProviderFilter = ""; mediaFormatFilter = "" }.font(.caption)
+            }
+        }
+        NavigationLink {
+            UpcomingWatchReleases(repository: repository, listID: listID)
+        } label: {
+            Label("Upcoming Episodes", systemImage: "calendar.badge.clock")
+                .font(.subheadline)
+        }
+    }
+    private var mediaFilters: some View {
+        NavigationStack {
+            Form {
+                Section("Media Type") { Picker("Type", selection: $mediaFormatFilter) { Text("All Types").tag(""); ForEach(ReadingMedia.formats, id: \.self) { Text($0).tag($0) } } }
+                Section("Saved Service or Source") { Picker("Provider", selection: $mediaProviderFilter) { Text("All Providers").tag(""); ForEach(Array(Set(mediaProviders + (mediaProviderFilter.isEmpty ? [] : [mediaProviderFilter]))).sorted(), id: \.self) { Text($0).tag($0) } } }
+                Button("Reset Filters") { mediaProviderFilter = ""; mediaFormatFilter = "" }
+            }
+            .navigationTitle("Media Filters")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingMediaFilters = false } } }
         }
     }
     private var filteredCompletedIDs: Set<String> { Set(progressTasks.filter(\.isCompleted).map(\.id)) }
@@ -898,13 +1325,18 @@ struct SpecializedTaskListView: View {
             values.formUnion((repository.listProfile(listID).settings["Sections"] ?? "").split(separator: "\n").map(String.init))
         }
         let order = type == .shopping && !groupByStore ? repository.shoppingCategoryOrder(listID: listID, store: storeFilter) : (repository.listProfile(listID).settings["Aisle Order"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let effectiveOrder = type == .reading ? ReadingMedia.watchGroupOrder : order
         return values.sorted {
-            let left = order.firstIndex(of: $0) ?? Int.max
-            let right = order.firstIndex(of: $1) ?? Int.max
+            let left = effectiveOrder.firstIndex(of: $0) ?? Int.max
+            let right = effectiveOrder.firstIndex(of: $1) ?? Int.max
             return left == right ? $0.localizedStandardCompare($1) == .orderedAscending : left < right
         }
     }
     private func group(_ task: TaskItem) -> String {
+        let fields = repository.specializedDetails(task).fields
+        if type == .reading, ReadingMedia.action(for: ReadingMedia.displayFormat(fields)) == "Watch" {
+            return ReadingMedia.watchGroup(fields, completed: task.isCompleted)
+        }
         let value = repository.specializedDetails(task).fields[type == .shopping && groupByStore ? "Store" : type.groupField] ?? ""
         return value.isEmpty ? (type == .reading ? "Saved" : "Other") : (type == .shopping && !groupByStore ? ShoppingCatalog.canonicalCategory(value) : value)
     }
@@ -913,19 +1345,21 @@ struct SpecializedTaskListView: View {
         let progress = progressTasks
         let rowsByGroup = Dictionary(grouping: visible, by: group)
         let progressByGroup = Dictionary(grouping: progress, by: group)
-        let completed = progress.filter { $0.isCompleted }
+        let completed = progress.filter { $0.isCompleted && !(type == .reading && ReadingMedia.action(for: ReadingMedia.displayFormat(repository.specializedDetails($0).fields)) == "Watch") }
         let sectionNames = groups
         let milestoneMembers = Dictionary(grouping: progress, by: { repository.specializedDetails($0).fields["Milestone"] ?? "" })
         let milestones = milestoneMembers.mapValues { (done: $0.filter { $0.isCompleted }.count, total: $0.count) }
         Group {
-        if type == .projects && viewMode == .board {
+        if type == .projects && viewMode == .board && !dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 8) {
+            if visible.isEmpty { ContentUnavailableView(type == .shopping && emptyState == .finished ? "All done shopping" : emptyState.title(type: type), systemImage: type.icon, description: Text(type == .reading && (!mediaFormatFilter.isEmpty || !mediaProviderFilter.isEmpty) ? "Clear your filters to see all saved titles." : emptyState.message(type: type))) }
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(sectionNames.isEmpty ? ["Other"] : sectionNames, id: \.self) { section in
                         VStack(alignment: .leading, spacing: 12) {
                             HStack { Text(section).font(.headline); Spacer(); Text("\(rowsByGroup[section, default: []].count)").foregroundStyle(.secondary) }
                             let members = progressByGroup[section, default: []]
-                            Text("\(members.filter { $0.isCompleted }.count)/\(members.count) complete").font(.caption).foregroundStyle(.secondary)
+                            workflowSummary(members)
                             ScrollView {
                                 LazyVStack(spacing: 12) {
                                     ForEach(rowsByGroup[section, default: []]) { task in
@@ -945,12 +1379,13 @@ struct SpecializedTaskListView: View {
                     }
                 }.padding(12)
             }
+            }
         } else {
         List {
             Section {
-                Label(type.rawValue, systemImage: type.icon).font(.headline)
-                ProgressView(value: Double(completed.count), total: Double(max(1, progress.count)))
-                Text("\(completed.count) of \(progress.count) completed").font(.subheadline).foregroundStyle(.secondary)
+                if type == .shopping { shoppingHeader(progress) }
+                else if type == .reading { readingHeader(progress) }
+                else { Label(type.rawValue, systemImage: type.icon).font(.headline); workflowSummary(progress) }
                 if type == .packing { Toggle("Still to Pack", isOn: $remainingOnly) }
                 if type == .routines, let current = visible.first {
                     VStack(alignment: .leading) {
@@ -966,29 +1401,12 @@ struct SpecializedTaskListView: View {
                     Text(repository.listProfile(listID).settings["Trip"] ?? "Packing List")
                     if let dates = repository.listProfile(listID).settings["Travel Dates"], !dates.isEmpty { Text(dates).foregroundStyle(.secondary) }
                 }
-                if type == .shopping {
-                    Button("Add Shopping Item", systemImage: "plus") { editorDraft = repository.makeDraft() }
-                    Label(storeFilter.map { $0.isEmpty ? "No Store" : $0 } ?? "All Stores", systemImage: "storefront").font(.subheadline).foregroundStyle(.secondary)
-                    shoppingBudgetSummary(progress)
-                    Button("Estimate Missing Prices (\(unpricedShoppingItems.count))", systemImage: "dollarsign.circle") { priceEntryIDs = unpricedShoppingItems.map(\.id); showingPriceEntry = true }
-                        .disabled(unpricedShoppingItems.isEmpty || repository.isUndoing)
-                    Picker("Store", selection: $storeFilter) {
-                        Text("All Stores").tag(String?.none)
-                        Text("No Store").tag(Optional(""))
-                        ForEach(storeChoices, id: \.self) { Text($0).tag(Optional($0)) }
-                    }
-                    Toggle("Shopping Mode", isOn: $shoppingMode)
-                    Toggle("Favorites Only", isOn: $showFavorites)
-                    Toggle("Group by Store", isOn: $groupByStore)
-                    Button("Paste Several Items", systemImage: "text.badge.plus") { showingBulkCapture = true }
-                }
                 if type == .projects {
                     let nextCount = repository.projectNextActions.count
                     Button { showingNextActions = true } label: {
                         LabeledContent { Text("\(nextCount)") } label: { Label("Next Actions in All Projects", systemImage: "arrow.right.circle") }
                     }
                 }
-                if type == .reading { Button("Save a Link", systemImage: "link.badge.plus") { showingReadingCapture = true } }
                 if type == .bills {
                     ForEach(billTotals.keys.sorted(), id: \.self) { currency in
                         LabeledContent("Open total" + (currency == "Unspecified" ? " (no currency)" : ""), value: SpecializedFieldFormat.amount(billTotals[currency, default: 0], currency: currency == "Unspecified" ? nil : currency))
@@ -1015,7 +1433,8 @@ struct SpecializedTaskListView: View {
                 }
             }
             if visible.isEmpty {
-                ContentUnavailableView(type == .shopping ? "Ready for Your Next Trip" : "No Items", systemImage: type.icon, description: Text(type == .shopping ? "Add items, paste a list, or choose previous purchases for this store." : "Add an item or start a saved template."))
+                ContentUnavailableView(type == .reading && (!mediaFormatFilter.isEmpty || !mediaProviderFilter.isEmpty) ? "No Matching Titles" : emptyState.title(type: type), systemImage: emptyState == .finished ? "checkmark.circle" : type.icon, description: Text(emptyState.message(type: type)))
+                if emptyState == .filtered || (type == .reading && (!mediaFormatFilter.isEmpty || !mediaProviderFilter.isEmpty)) { Button("Reset Filters", systemImage: "line.3.horizontal.decrease") { storeFilter = nil; showFavorites = false; remainingOnly = false; showPreviousRuns = true; mediaProviderFilter = ""; mediaFormatFilter = "" } }
                 Button("Add Item", systemImage: "plus") { editorDraft = repository.makeDraft() }
                 if type == .shopping {
                     Button("Paste Items", systemImage: "text.badge.plus") { showingBulkCapture = true }
@@ -1024,6 +1443,32 @@ struct SpecializedTaskListView: View {
             }
             ForEach(sectionNames, id: \.self) { section in
                 Section {
+                    if type == .reading {
+                        Button {
+                            if collapsed.contains(section) { collapsed.remove(section) }
+                            else { collapsed.insert(section) }
+                            persistPreferences()
+                        } label: {
+                            HStack {
+                                Text(section).font(.headline).foregroundStyle(.primary)
+                                Spacer()
+                                Text("\(rowsByGroup[section, default: []].count)").foregroundStyle(.secondary)
+                                Image(systemName: collapsed.contains(section) ? "chevron.right" : "chevron.down")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .accessibilityValue(collapsed.contains(section) ? "Collapsed" : "Expanded")
+                        if !collapsed.contains(section) {
+                            ForEach(rowsByGroup[section, default: []]) { task in
+                                itemRow(task, milestones: milestones, sections: sectionNames)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                            }
+                        }
+                    } else {
                     DisclosureGroup(isExpanded: Binding(get: { !collapsed.contains(section) }, set: { expanded in
                         if expanded { collapsed.remove(section) } else { collapsed.insert(section) }; persistPreferences()
                     })) {
@@ -1032,15 +1477,38 @@ struct SpecializedTaskListView: View {
                         HStack { Text(section).font(.headline); Spacer(); Text("\(rowsByGroup[section, default: []].count)").foregroundStyle(.secondary) }
                         if type == .packing || type == .projects {
                             let members = progressByGroup[section, default: []]
-                            Text("\(members.filter { $0.isCompleted }.count)/\(members.count) complete").font(.caption).foregroundStyle(.secondary)
+                            workflowSummary(members)
                         }
+                    }
                     }
                 }
             }
             if !(type == .packing && remainingOnly), !completed.isEmpty {
                 Section {
-                    DisclosureGroup("\(type == .shopping ? "Purchased" : "Completed") (\(completed.count))", isExpanded: $completedExpanded) {
-                        ForEach(completed) { itemRow($0, milestones: milestones, sections: sectionNames) }
+                    if type == .reading {
+                        Button { completedExpanded.toggle() } label: {
+                            HStack {
+                                Text("Finished (\(completed.count))").font(.headline)
+                                Spacer()
+                                Image(systemName: completedExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                            }.foregroundStyle(.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .accessibilityValue(completedExpanded ? "Expanded" : "Collapsed")
+                        if completedExpanded {
+                            ForEach(completed) {
+                                itemRow($0, milestones: milestones, sections: sectionNames)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                            }
+                        }
+                    } else {
+                        DisclosureGroup("\(type == .shopping ? "Purchased" : "Completed") (\(completed.count))", isExpanded: $completedExpanded) {
+                            ForEach(completed) { itemRow($0, milestones: milestones, sections: sectionNames) }
+                        }
                     }
                     if type == .shopping {
                         Button("Clear Completed", systemImage: "trash", role: .destructive) { pendingClearIDs = filteredCompletedIDs }
@@ -1054,6 +1522,24 @@ struct SpecializedTaskListView: View {
         }
         }
         }
+        .safeAreaInset(edge: .bottom) {
+            if type == .shopping, !selectingItems {
+                shoppingBudgetSummary(progressTasks).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal).padding(.vertical, 8).background(.regularMaterial)
+            }
+            if selectingItems {
+                VStack(spacing: 8) {
+                    Text("\(selectedIDs.count) selected").font(.subheadline)
+                    HStack {
+                        Button("Select Visible") { selectedIDs = Set(items.map(\.id)) }
+                        Spacer()
+                        Button("Edit") { showingBulkEditor = true }.disabled(selectedIDs.isEmpty || repository.isUndoing)
+                        Button("Done") { selectingItems = false; selectedIDs = [] }
+                    }.buttonStyle(.borderless)
+                }.padding().background(.regularMaterial)
+            }
+        }
+        .navigationBarTitleDisplayMode(dynamicTypeSize.isAccessibilitySize ? .inline : .automatic)
+        .onChange(of: listID) { selectingItems = false; selectedIDs = [] }
         .task(id: timerEnd) {
             // Clear the finished countdown; the notification and Live Activity report completion.
             guard let timerEnd else { return }
@@ -1064,22 +1550,53 @@ struct SpecializedTaskListView: View {
         .onAppear {
             loadTimer()
             let settings = repository.listProfile(listID).settings
+            mediaProviderFilter = settings["Media Provider Filter"] ?? ""
+            mediaFormatFilter = settings["Media Format Filter"] ?? ""
             shoppingMode = settings["Shopping Mode"] == "true"
             groupByStore = settings["Group Store"] == "true"
             storeFilter = settings["Store Filter"]
             showFavorites = settings["Favorites Only"] == "true"
+            watchSort = settings["Watch Sort"] ?? (settings["Sort Name"] == "true" ? "Title" : "Recently Watched")
             sortByName = settings["Sort Name"] == "true"
             completedExpanded = settings["Completed Expanded"] == "true"
             collapsed = Set(settings["Collapsed"].flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
+            if type == .reading, settings["Episode Grouping Version"] != "1" {
+                collapsed.formUnion(["Finished Series", "Finished", "Dropped"])
+                var profile = repository.listProfile(listID)
+                profile.settings["Episode Grouping Version"] = "1"
+                repository.setListProfile(profile, for: listID)
+                persistPreferences()
+            }
         }
+        .onChange(of: mediaProviderFilter) { persistPreferences() }
+        .onChange(of: mediaFormatFilter) { persistPreferences() }
+        .sheet(isPresented: $showingListCleanup) { ListCleanupView(repository: repository, listID: listID) }
+        .sheet(item: $trackedShow) { item in WatchShowTracker(repository: repository, taskID: item.id) }
+        .sheet(item: $artworkItem) { item in
+            NavigationStack { ShowArtworkPicker(title: item.title) { show in
+                Task { _ = await repository.applyShowArtwork(show, to: item) }
+            } }
+        }
+        .sheet(isPresented: $showingMediaFilters) { mediaFilters }
         .onChange(of: shoppingMode) { persistPreferences() }
         .onChange(of: groupByStore) { persistPreferences() }
         .onChange(of: storeFilter) { persistPreferences() }
         .onChange(of: showFavorites) { persistPreferences() }
+        .onChange(of: watchSort) { _, _ in persistPreferences() }
         .onChange(of: sortByName) { persistPreferences() }
         .onChange(of: completedExpanded) { persistPreferences() }
         .sheet(item: $editingItem) { task in NavigationStack { if type == .shopping { ShoppingItemEditor(repository: repository, draft: TaskDraft(task: task), task: task) } else { SpecializedTaskEditor(repository: repository, task: task, type: type) } } }
         .sheet(item: $checklistTask) { task in SpecializedChecklistView(repository: repository, task: task) }
+        .sheet(isPresented: $showingFilters, onDismiss: {
+            switch pendingFilterTool {
+            case "paste": showingBulkCapture = true
+            case "again": showingBuyAgain = true
+            case "prices": showingPriceEntry = true
+            default: break
+            }
+            pendingFilterTool = nil
+        }) { shoppingFilters }
+        .sheet(isPresented: $showingBulkEditor) { ListBulkEditor(repository: repository, listID: listID, selectedIDs: $selectedIDs) }
         .sheet(isPresented: $showingSettings) { SpecializedListOptions(repository: repository, listID: listID) }
         .sheet(isPresented: $showingReadingCapture) { ReadingLinkCapture(repository: repository, listID: listID) }
         .sheet(isPresented: $showingPriceEntry) { ShoppingPriceEntryMode(repository: repository, itemIDs: priceEntryIDs) }
@@ -1090,13 +1607,27 @@ struct SpecializedTaskListView: View {
             }
         }
         .sheet(isPresented: $showingShoppingCategories) { NavigationStack { ShoppingCategoryManager(repository: repository, listID: listID, store: storeFilter) } }
+        .sheet(isPresented: Binding(get: { recentPurchase != nil }, set: { if !$0 { recentPurchase = nil } })) {
+            if let suggestion = recentPurchase {
+                NavigationStack { ShoppingItemEditor(repository: repository, draft: TaskDraft(listID: listID), initialDetails: suggestion.details, initialTitle: suggestion.title, initialNotes: suggestion.notes) }
+            }
+        }
         .sheet(isPresented: $showingBuyAgain) { NavigationStack { ShoppingItemEditor(repository: repository, draft: TaskDraft(listID: listID)) } }
         .sheet(isPresented: $showingBulkCapture) { ShoppingBulkCapture(repository: repository, listID: listID) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Toggle("Sort by Name", isOn: $sortByName)
-                    Button("Customize Fields", systemImage: "slider.horizontal.3") { showingSettings = true }
+                    if !type.bulkFields.isEmpty {
+                        Button(selectingItems ? "Done Selecting" : "Select Items", systemImage: "checkmark.circle") { selectingItems.toggle(); selectedIDs = [] }
+                    }
+                    if type == .shopping { Button("Filters & Shopping Tools", systemImage: "line.3.horizontal.decrease") { showingFilters = true } }
+                    if type == .reading {
+                        Picker("Sort Within Groups", selection: $watchSort) {
+                            ForEach(["Recently Watched", "New Releases", "Title"], id: \.self) { Text($0).tag($0) }
+                        }
+                    } else { Toggle("Sort by Name", isOn: $sortByName) }
+                    Button("Clean Up Items", systemImage: "trash") { showingListCleanup = true }
+                    Button("Customize List", systemImage: "slider.horizontal.3") { showingSettings = true }
                     if let action = repository.taskUndo { Button("Undo " + action.message, systemImage: "arrow.uturn.backward") { Task { await repository.undoLastTaskAction() } } }
                     if repository.listProfile(listID).settings["Current Run"] != nil { Toggle("Show Previous Runs", isOn: $showPreviousRuns) }
                     if type == .projects {
@@ -1216,7 +1747,7 @@ struct SpecializedTaskListView: View {
         let remaining = priced.filter { !$0.0 }.reduce(0) { $0 + $1.1 }
         VStack(alignment: .leading, spacing: 4) {
             Text("Estimated total: " + (purchased + remaining).formatted(.currency(code: shoppingCurrency))).font(.subheadline.weight(.semibold))
-            Text("Purchased: " + purchased.formatted(.currency(code: shoppingCurrency)) + " · Remaining: " + remaining.formatted(.currency(code: shoppingCurrency))).font(.caption).foregroundStyle(.secondary)
+            Text("Remaining: " + remaining.formatted(.currency(code: shoppingCurrency))).font(.caption).foregroundStyle(.secondary)
             if tasks.count > priced.count { Text("\(tasks.count - priced.count) items without a price").font(.caption).foregroundStyle(.secondary) }
             if let budget = Double(repository.listProfile(listID).settings["Shopping Budget"] ?? ""), budget.isFinite, budget > 0 {
                 Text("Budget: " + budget.formatted(.currency(code: shoppingCurrency)) + " · " + abs(budget - purchased - remaining).formatted(.currency(code: shoppingCurrency)) + (purchased + remaining > budget ? " over" : " left"))
@@ -1235,19 +1766,207 @@ struct SpecializedTaskListView: View {
             .background((emphasized ? Color.accentColor : Color.secondary).opacity(0.12), in: Capsule())
             .accessibilityLabel("Quantity " + quantity + " " + (details.fields["Unit"] ?? ""))
     }
-    private func itemRow(_ task: TaskItem, milestones: [String: (done: Int, total: Int)], sections: [String]) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            if type == .reading, repository.listProfile(listID).settings["Show Thumbnails"] == "true",
-               let raw = repository.specializedDetails(task).fields["Thumbnail URL"], let url = URL(string: raw), url.scheme == "https" {
-                AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Image(systemName: "book").foregroundStyle(.secondary) }
-                    .frame(width: 40, height: 52).clipped().clipShape(RoundedRectangle(cornerRadius: 6)).accessibilityHidden(true)
+    private var emptyState: ListEmptyState {
+        let all = repository.rootTasks.filter { $0.listID == listID && (type != .reading || repository.specializedDetails($0).fields["Merged Into"] == nil) }
+        return ListEmptyState.resolve(total: all.count, open: all.filter { !$0.isCompleted }.count)
+    }
+    private func toggleSelection(_ id: String) {
+        if selectedIDs.contains(id) { selectedIDs.remove(id) } else { selectedIDs.insert(id) }
+    }
+    @ViewBuilder private func workflowSummary(_ tasks: [TaskItem]) -> some View {
+        let count = tasks.filter { type.workflowDone(completed: $0.isCompleted, fields: repository.specializedDetails($0).fields) }.count
+        VStack(alignment: .leading, spacing: 4) {
+            ProgressView(value: Double(count), total: Double(max(1, tasks.count)))
+            Text("\(count) of \(tasks.count) " + type.workflowLabel).font(.subheadline).foregroundStyle(.secondary)
+            if type == .packing {
+                let prepared = tasks.filter { let stage = repository.specializedDetails($0).fields["Stage"]; return $0.isCompleted || stage == "Prepared" || stage == "Packed" }.count
+                Text("\(prepared) prepared or packed").font(.caption).foregroundStyle(.secondary)
             }
-            Button { Task { await repository.toggleCompletion(for: task) } } label: {
-                Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle").font(shoppingMode ? .title : .title2).frame(minWidth: 44, minHeight: 44)
-            }.buttonStyle(.borderless).accessibilityLabel((task.isCompleted ? "Reopen " : "Complete ") + task.title)
-            VStack(alignment: .leading, spacing: 4) {
-            Button { repository.selectedTaskID = task.id } label: {
-                VStack(alignment: .leading, spacing: 4) {
+            if type == .bills {
+                let canceled = tasks.filter { repository.specializedDetails($0).fields["Stage"] == "Canceled" }.count
+                if canceled > 0 { Text("\(canceled) canceled").font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+    }
+    private func shoppingHeader(_ tasks: [TaskItem]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    shoppingStoreChip("All Stores", value: nil)
+                    ForEach(storeChoices + [""], id: \.self) { store in
+                        shoppingStoreChip(store.isEmpty ? "No Store" : store, value: store)
+                    }
+                }
+            }
+            if storeFilter != nil || showFavorites {
+                HStack {
+                    Text([storeFilter.map { $0.isEmpty ? "No Store" : $0 }, showFavorites ? "Favorites" : nil].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear Filters") { storeFilter = nil; showFavorites = false }.font(.caption)
+                }
+            }
+            workflowSummary(tasks)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Button("Add Item", systemImage: "plus") { editorDraft = repository.makeDraft() }.fixedSize(horizontal: true, vertical: true)
+                    Spacer()
+                    Button(showFavorites ? "Filters · Favorites" : "Filters", systemImage: "line.3.horizontal.decrease") { showingFilters = true }.fixedSize(horizontal: true, vertical: true)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Button("Add Item", systemImage: "plus") { editorDraft = repository.makeDraft() }
+                    Button(showFavorites ? "Filters · Favorites" : "Filters", systemImage: "line.3.horizontal.decrease") { showingFilters = true }
+                }
+            }.buttonStyle(.borderless).labelStyle(.titleAndIcon)
+            let suggestions = repository.shoppingRepeatSuggestions(listID: listID).filter { suggestion in
+                (storeFilter == nil || (suggestion.details.fields["Store"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(storeFilter ?? "") == .orderedSame) && !items.contains { ShoppingQuantity.key(title: $0.title, fields: repository.specializedDetails($0).fields) == ShoppingQuantity.key(title: suggestion.title, fields: suggestion.details.fields) }
+            }
+            if !suggestions.isEmpty {
+                Text("Buy Again").font(.caption).foregroundStyle(.secondary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack {
+                        ForEach(Array(suggestions.prefix(5).enumerated()), id: \.offset) { _, suggestion in
+                            Button(suggestion.title, systemImage: "plus") { recentPurchase = suggestion }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+        }.padding(.vertical, 4)
+    }
+    private func shoppingStoreChip(_ title: String, value: String?) -> some View {
+        Button { storeFilter = value } label: {
+            Text(title).font(.subheadline.weight(storeFilter == value ? .semibold : .regular))
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(storeFilter == value ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1), in: Capsule())
+        }.buttonStyle(.plain).accessibilityAddTraits(storeFilter == value ? .isSelected : [])
+    }
+    private var shoppingFilters: some View {
+        NavigationStack {
+            Form {
+                Section("Filters") {
+                    Picker("Store", selection: $storeFilter) {
+                        Text("All Stores").tag(String?.none)
+                        Text("No Store").tag(Optional(""))
+                        ForEach(storeChoices, id: \.self) { Text($0).tag(Optional($0)) }
+                    }
+                    Toggle("Favorites Only", isOn: $showFavorites)
+                    Toggle("Group by Store", isOn: $groupByStore)
+                    Toggle("Sort by Name", isOn: $sortByName)
+                    Toggle("Shopping Mode", isOn: $shoppingMode)
+                    Button("Reset Filters") { storeFilter = nil; showFavorites = false }
+                }
+                Section("Shopping Tools") {
+                    Button("Paste Several Items", systemImage: "text.badge.plus") { pendingFilterTool = "paste"; showingFilters = false }
+                    Button("Buy Again", systemImage: "cart.badge.plus") { pendingFilterTool = "again"; showingFilters = false }
+                    Button("Estimate Missing Prices (\(unpricedShoppingItems.count))", systemImage: "dollarsign.circle") {
+                        priceEntryIDs = unpricedShoppingItems.map(\.id); pendingFilterTool = "prices"; showingFilters = false
+                    }.disabled(unpricedShoppingItems.isEmpty || repository.isUndoing)
+                    NavigationLink("Categories & Aisle Order") { ShoppingCategoryManager(repository: repository, listID: listID, store: storeFilter) }
+                }
+            }.taskFlowThemedBackground().navigationTitle("Filters & Shopping Tools")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingFilters = false } } }
+        }
+    }
+    @ViewBuilder private func quickActions(_ task: TaskItem, sections: [String]) -> some View {
+        let fields = repository.specializedDetails(task).fields
+        if type == .projects {
+            Menu {
+                Button("No Section") { repository.moveProjectItems([task], to: "") }
+                ForEach(Array(Set(sections + repository.listFieldChoices("Section", listID: listID))).filter { $0 != "Other" }.sorted(), id: \.self) { section in
+                    Button(section) { repository.moveProjectItems([task], to: section) }
+                }
+            } label: {
+                Label("Move to Section", systemImage: "rectangle.split.3x1")
+            }.font(.caption).buttonStyle(.borderless).disabled(repository.isUndoing)
+        }
+        if !type.stages.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { stageMenu(task); primaryStageAction(task) }
+                VStack(alignment: .leading, spacing: 6) { stageMenu(task); primaryStageAction(task) }
+            }.font(.caption).buttonStyle(.borderless).disabled(repository.isUndoing)
+        }
+        if type == .shopping, !task.isCompleted, dynamicTypeSize.isAccessibilitySize {
+            HStack {
+                Button("Decrease Quantity", systemImage: "minus.circle") { Task { await repository.adjustShoppingQuantity(task, by: -1) } }
+                    .disabled((ShoppingQuantity.value(fields["Quantity"]) ?? 1) <= 1)
+                Button("Increase Quantity", systemImage: "plus.circle") { Task { await repository.adjustShoppingQuantity(task, by: 1) } }
+            }.font(.caption).buttonStyle(.borderless).disabled(repository.isUndoing || repository.shoppingQuantityIsUpdating(task.id))
+        }
+    }
+    private func stageMenu(_ task: TaskItem) -> some View {
+        let stage = type.displayedStage(completed: task.isCompleted, fields: repository.specializedDetails(task).fields)
+        return Menu {
+            ForEach(type.stages, id: \.self) { value in
+                Button(value) { Task { await repository.setSpecializedStage(value, for: task, type: type) } }
+            }
+        } label: { Label(stage, systemImage: "arrow.triangle.2.circlepath") }
+    }
+    @ViewBuilder private func primaryStageAction(_ task: TaskItem) -> some View {
+        if !task.isCompleted {
+            let current = type.displayedStage(completed: task.isCompleted, fields: repository.specializedDetails(task).fields)
+            let next = type == .bills ? "Paid" : (current == type.stages.first ? (type.stages.dropFirst().first ?? current) : (type.stages.last ?? current))
+            Button(type == .bills ? "Mark Paid" : (type == .packing ? (next == "Prepared" ? "Mark Prepared" : "Mark Packed") : (next == "In Progress" ? "Start" : "Finish")), systemImage: "checkmark.circle") {
+                Task { await repository.setSpecializedStage(next, for: task, type: type) }
+            }
+        }
+    }
+    private func readingCardMenu(_ task: TaskItem) -> some View {
+                Menu {
+                    Button("Details", systemImage: "info.circle") { repository.selectedTaskID = task.id }
+                    let fields = repository.specializedDetails(task).fields
+                    if fields["Preview Status"] != "Pending" {
+                        Button("Retry Link Preview", systemImage: "arrow.clockwise") { repository.retryReadingPreview(task) }
+                    }
+                    let format = ReadingMedia.displayFormat(fields)
+                    if ReadingMedia.action(for: format) == "Watch", format != "Movie", format != "Episode" { Button("Show & Episodes", systemImage: "tv") { trackedShow = task } }
+                    if ReadingMedia.action(for: format) == "Watch", format != "Movie", format != "Episode" {
+                        Button("Change Poster", systemImage: "photo.on.rectangle") { artworkItem = task }
+                    }
+                    ForEach(type.stages, id: \.self) { value in
+                        Button(value) { Task { await repository.setSpecializedStage(value, for: task, type: type) } }
+                    }
+                } label: { Image(systemName: "ellipsis").frame(minWidth: 48, minHeight: 48) }
+                    .buttonStyle(.borderless).disabled(repository.isUndoing).accessibilityLabel("Actions for " + task.title)
+    }
+
+    private func itemRow(_ task: TaskItem, milestones: [String: (done: Int, total: Int)], sections: [String]) -> some View {
+        let isWatchCard = type == .reading && ReadingMedia.action(for: ReadingMedia.displayFormat(repository.specializedDetails(task).fields)) == "Watch"
+        return HStack(alignment: .top, spacing: 12) {
+            if selectingItems {
+                Button { toggleSelection(task.id) } label: {
+                    Image(systemName: selectedIDs.contains(task.id) ? "checkmark.square.fill" : "square").font(.title2).frame(minWidth: 44, minHeight: 44)
+                }.buttonStyle(.borderless).accessibilityLabel((selectedIDs.contains(task.id) ? "Deselect " : "Select ") + task.title)
+            }
+            if !isWatchCard, type == .reading, !selectingItems, !dynamicTypeSize.isAccessibilitySize, repository.listProfile(listID).settings["Show Thumbnails"] != "false" {
+                let fields = repository.specializedDetails(task).fields
+                Button {
+                    repository.openTask(id: task.id)
+                } label: {
+                    let isWatch = ReadingMedia.action(for: ReadingMedia.displayFormat(fields)) == "Watch"
+                    let matchedPoster = fields["Suppress Preview"] == "true" ? nil : (fields["Artwork Override"] == "true" ? fields["Thumbnail URL"] : ReadingMedia.tracking(fields)?.show.thumbnail?.absoluteString)
+                    CachedMediaPreview(rawURL: isWatch ? (matchedPoster ?? fields["Thumbnail URL"]) : fields["Thumbnail URL"], format: ReadingMedia.displayFormat(fields), localPreview: isWatch && matchedPoster != nil ? nil : fields["Local Preview"], poster: isWatch)
+                }
+                    .buttonStyle(.borderless).accessibilityLabel("Open " + task.title)
+            }
+            if type != .reading {
+                Button { Task { await repository.toggleCompletion(for: task) } } label: {
+                    Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle").font(type == .shopping ? .title : .title2).frame(minWidth: type == .shopping ? 56 : 44, minHeight: type == .shopping ? 56 : 44).contentShape(Rectangle())
+                }.buttonStyle(.borderless).disabled(selectingItems).accessibilityLabel((task.isCompleted ? "Reopen " : "Complete ") + task.title)
+            }
+            VStack(alignment: .leading, spacing: isWatchCard ? 12 : 4) {
+            Button {
+                if selectingItems { toggleSelection(task.id) }
+                else if isWatchCard, ReadingMedia.tracking(repository.specializedDetails(task).fields) != nil { trackedShow = task }
+                else if type == .reading { repository.openTask(id: task.id) }
+                else { repository.selectedTaskID = task.id }
+            } label: {
+                HStack(alignment: .top, spacing: 14) {
+                    if isWatchCard, !selectingItems, !dynamicTypeSize.isAccessibilitySize, repository.listProfile(listID).settings["Show Thumbnails"] != "false" {
+                        let fields = repository.specializedDetails(task).fields
+                        let matchedPoster = fields["Suppress Preview"] == "true" ? nil : (fields["Artwork Override"] == "true" ? fields["Thumbnail URL"] : ReadingMedia.tracking(fields)?.show.thumbnail?.absoluteString)
+                        CachedMediaPreview(rawURL: matchedPoster ?? fields["Thumbnail URL"], format: ReadingMedia.displayFormat(fields), localPreview: matchedPoster == nil ? fields["Local Preview"] : nil, poster: true)
+                    }
+                VStack(alignment: .leading, spacing: isWatchCard ? 6 : 4) {
                     if type == .errands {
                         let destination = repository.specializedDetails(task).fields["Destination"] ?? ""
                         if let place = task.location, place.latitude != nil {
@@ -1257,23 +1976,23 @@ struct SpecializedTaskListView: View {
                     }
                     let details = repository.specializedDetails(task)
                     HStack(alignment: .firstTextBaseline) {
-                        Text(task.title).foregroundStyle(.primary).font(shoppingMode ? .title3 : .body).strikethrough(task.isCompleted)
+                        Text(task.title).foregroundStyle(.primary).font(shoppingMode ? .title3 : .body).strikethrough(task.isCompleted).fixedSize(horizontal: false, vertical: true)
                         if type == .shopping { shoppingBadge(details, completed: task.isCompleted) }
                     }
                     if type == .shopping {
-                        let subtitle = [details.fields["Store"], details.fields["Category"], details.fields["Shopper"].flatMap { $0.isEmpty ? nil : "Shopper: " + $0 }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                        let subtitle = [storeFilter == nil && !groupByStore ? details.fields["Store"] : nil, groupByStore ? details.fields["Category"] : nil, details.fields["Shopper"].flatMap { $0.isEmpty ? nil : "Shopper: " + $0 }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
                         if !subtitle.isEmpty { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
 
                         if task.isCompleted {
                             if let actor = details.fields["Purchased By"], let timestamp = details.fields["Purchased At"], let purchasedAt = ISO8601DateFormatter().date(from: timestamp), let completedAt = task.completedAt, abs(completedAt.timeIntervalSince(purchasedAt)) < 60 {
                                 Text("Purchased by " + actor).font(.caption2).foregroundStyle(.secondary)
                             } else { Text("Purchased in Reminders").font(.caption2).foregroundStyle(.secondary) }
-                        } else if let actor = details.fields["Added By"] { Text("Added by " + actor).font(.caption2).foregroundStyle(.secondary) }
+                        } else if let actor = details.fields["Added By"], actor != repository.shoppingShopperName { Text("Added by " + actor).font(.caption2).foregroundStyle(.secondary) }
                     } else if type == .bills {
                         let amount = Double(details.fields["Amount"] ?? "").flatMap { $0.isFinite ? SpecializedFieldFormat.amount($0, currency: details.fields["Currency"]) : nil }
                         let line = ([amount] + [details.fields["Provider"], details.fields["Stage"]]).compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
                         if !line.isEmpty { Text(line).font(.subheadline).foregroundStyle(.secondary) }
-                    } else if !details.summary.isEmpty { Text(details.summary).font(.subheadline).foregroundStyle(.secondary) }
+                    } else if type != .reading, !details.summary.isEmpty { Text(details.summary).font(.subheadline).foregroundStyle(.secondary) }
                     if type == .projects {
                         if !(details.fields["Blocked Reason"] ?? "").isEmpty { Label("Blocked: " + (details.fields["Blocked Reason"] ?? ""), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange) }
                         if details.fields["Next Action"] == "Yes" { Label("Next Action", systemImage: "arrow.right.circle").font(.caption).foregroundStyle(.tint) }
@@ -1304,25 +2023,98 @@ struct SpecializedTaskListView: View {
                     if type == .appointments, let followUp = SpecializedFieldFormat.date(details.fields["Follow-up Date"]) { Label("Follow-up: " + followUp, systemImage: "arrow.uturn.forward").font(.caption).foregroundStyle(.secondary) }
                     if type == .appointments, let outcome = details.fields["Outcome"], !outcome.isEmpty { Text("Outcome: " + outcome).font(.caption).lineLimit(2).foregroundStyle(.secondary) }
                     if type == .reading {
-                        if let progress = details.fields["Progress Detail"], !progress.isEmpty { Text(progress).font(.caption).foregroundStyle(.secondary) }
-                        if let rating = details.fields["Rating"], !rating.isEmpty { Text("Rating: " + rating + "/5").font(.caption).foregroundStyle(.secondary) }
-                        if let minutes = details.fields["Estimated Minutes"], !minutes.isEmpty { Text(minutes + " min").font(.caption).foregroundStyle(.secondary) }
+                        let fields = details.fields
+                        let source = (fields["Creator"] ?? "").isEmpty ? URL(string: fields["Source Link"] ?? "")?.host : fields["Creator"]
+                        let minutes = ReadingMedia.action(for: ReadingMedia.displayFormat(fields)) == "Read" ? fields["Estimated Minutes"].flatMap { Int($0) }.flatMap { $0 > 0 ? "\($0) min read" : nil } : nil
+                        let format = ReadingMedia.displayFormat(fields)
+                        let provider = fields["Streaming Service"] ?? fields["Saved From"] ?? ReadingMedia.watchLinks(fields).first?.provider
+                        let subtitle = ReadingMedia.action(for: format) == "Watch" ? [format, fields["Year"]].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ") : [source, minutes].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                        if !subtitle.isEmpty { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
+                        if let catalog = ReadingMedia.tracking(fields) {
+                            if let summary = ReadingMedia.watchProgressSummary(fields, completed: task.isCompleted) {
+                                Text(summary).font(.caption).foregroundStyle(.secondary)
+                            }
+                            if !["Finished Series", "Finished", "Dropped"].contains(ReadingMedia.watchGroup(fields, completed: task.isCompleted)), let remaining = ReadingMedia.remainingWatchTime(fields) {
+                                Text(remaining).font(.caption).foregroundStyle(.secondary)
+                            }
+                            if ReadingMedia.hasNewEpisode(fields), !task.isCompleted, fields["Progress"] != "Finished" {
+                                Label("New episode", systemImage: "sparkles").font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                            }
+                            if !["Finished Series", "Finished", "Dropped"].contains(ReadingMedia.watchGroup(fields, completed: task.isCompleted)), let season = (catalog.next() ?? catalog.upcoming())?.season ?? catalog.ordered.last?.season {
+                                let episodes = catalog.episodes.filter { $0.season == season }
+                                let watched = episodes.filter { catalog.watched.contains($0.id) }.count
+                                Text("Season \(season) · \(watched) of \(episodes.count) watched")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                ProgressView(value: Double(watched), total: Double(max(1, episodes.count)))
+                                    .accessibilityLabel("Season \(season): \(watched) of \(episodes.count) episodes watched")
+                            }
+
+                        }
+                        if ReadingMedia.action(for: format) == "Watch", let provider {
+                            Text(provider).font(.caption2).foregroundStyle(.tint).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 6).padding(.vertical, 3).background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+                        }
                     }
                     if type != .shopping, !shoppingMode, let date = task.dueDate { Text(date, format: .dateTime.month().day()).font(.caption).foregroundStyle(task.isOverdue() ? .red : .secondary) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(.trailing, isWatchCard && !selectingItems ? 48 : 0)
             }.buttonStyle(.plain)
-            if type == .shopping {
+            if !selectingItems, type != .reading { quickActions(task, sections: sections) }
+            if type == .reading, !selectingItems {
+                let fields = repository.specializedDetails(task).fields
+                let links = ReadingMedia.watchLinks(fields)
+                let action = ReadingMedia.action(for: ReadingMedia.displayFormat(fields))
+                HStack(spacing: 10) {
+                    if links.count > 1, !["Finished Series", "Finished", "Dropped"].contains(ReadingMedia.watchGroup(fields, completed: task.isCompleted)) {
+                        Menu {
+                            ForEach(links) { link in
+                                if let url = URL(string: link.url) { Link(action + " on " + link.provider, destination: url) }
+                            }
+                        } label: {
+                            Label(action == "Watch" ? "Watch On" : action, systemImage: "play.rectangle")
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                    } else if let link = links.first, let url = URL(string: link.url), action != "Watch" || !["Finished Series", "Finished", "Dropped"].contains(ReadingMedia.watchGroup(fields, completed: task.isCompleted)) {
+                        Link(destination: url) {
+                            Label(action == "Watch" ? "Watch On" : action, systemImage: ReadingMedia.symbol(for: ReadingMedia.displayFormat(fields)))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .accessibilityLabel(action + " on " + link.provider)
+                    }
+                    if ReadingMedia.tracking(fields) != nil {
+                        Button { trackedShow = task } label: {
+                            Label("Episodes", systemImage: "list.number")
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .accessibilityLabel("Episodes for " + task.title)
+                    } else if action == "Watch", ReadingMedia.displayFormat(fields) != "Movie", ReadingMedia.displayFormat(fields) != "Episode" {
+                        Button { trackedShow = task } label: {
+                            Label("Match Show", systemImage: "tv").frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                    }
+                }
+                .font(.subheadline)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.roundedRectangle)
+                if ReadingMedia.tracking(fields) != nil, !["Finished Series", "Finished", "Dropped"].contains(ReadingMedia.watchGroup(fields, completed: task.isCompleted)) {
+                    EpisodeProgressActions(repository: repository, taskID: task.id, compact: true).font(.subheadline)
+                }
+                if fields["Preview Status"] == "Pending" { Text("Fetching preview…").font(.caption).foregroundStyle(.secondary) }
+                if fields["Preview Status"] == "Unavailable" {
+                    Button("Retry Preview") { repository.retryReadingPreview(task) }.font(.caption).buttonStyle(.borderless)
+                }
+            }
+            if type == .shopping, !selectingItems {
                 Button { editingShoppingPrice = task } label: {
                     let fields = repository.specializedDetails(task).fields
                     if let price = Double(fields["Price"] ?? ""), price.isFinite, price >= 0 {
-                        let unit = (fields["Unit"] ?? "").isEmpty ? "unit" : (fields["Unit"] ?? "unit")
-                        Text(price.formatted(.currency(code: shoppingCurrency)) + " / " + unit + (ShoppingQuantity.cost(fields).map { " · " + $0.formatted(.currency(code: shoppingCurrency)) + " total" } ?? ""))
-                    } else { Label("Add Price", systemImage: "plus.circle") }
+                        Text((ShoppingQuantity.cost(fields) ?? price).formatted(.currency(code: shoppingCurrency)))
+                    } else { Image(systemName: "dollarsign.circle") }
                 }.font(.caption).buttonStyle(.borderless).disabled(repository.isUndoing)
                     .accessibilityLabel("Edit estimated price for " + task.title)
             }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            if type == .shopping, !task.isCompleted {
+            if type == .reading, !selectingItems, !isWatchCard { readingCardMenu(task) }
+            if type == .shopping, !task.isCompleted, !selectingItems, !dynamicTypeSize.isAccessibilitySize {
                 let value = ShoppingQuantity.value(repository.specializedDetails(task).fields["Quantity"])
                 HStack(spacing: 0) {
                     Button { Task { await repository.adjustShoppingQuantity(task, by: -1) } } label: { Image(systemName: "minus").frame(minWidth: 36, minHeight: 44) }
@@ -1334,6 +2126,16 @@ struct SpecializedTaskListView: View {
                 }.buttonStyle(.borderless).disabled(repository.shoppingQuantityIsUpdating(task.id) || repository.isUndoing)
             }
         }
+        .padding(.vertical, isWatchCard ? 16 : 0)
+        .padding(.horizontal, isWatchCard ? 12 : 0)
+        .background {
+            if isWatchCard { RoundedRectangle(cornerRadius: 18).fill(TaskFlowTheme.surface) }
+        }
+        .overlay(alignment: .topTrailing) {
+            if isWatchCard, !selectingItems { readingCardMenu(task).padding(8) }
+        }
+        .padding(.vertical, isWatchCard ? 6 : 0)
+        .listRowSeparator(isWatchCard ? .hidden : .automatic)
         .id(task.id)
         .disabled(deletingShoppingIDs.contains(task.id))
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -1343,7 +2145,7 @@ struct SpecializedTaskListView: View {
             }
         }
         .contextMenu {
-            Button("Edit List Details", systemImage: "pencil") { editingItem = task }
+            Button(type.detailsTitle, systemImage: "pencil") { editingItem = task }
             if type == .shopping {
                 Button("Delete Item", systemImage: "trash", role: .destructive) { pendingShoppingDelete = task }
                     .disabled(repository.isUndoing || deletingShoppingIDs.contains(task.id))
@@ -1650,7 +2452,7 @@ struct ShoppingItemEditor: View {
                     details = initialDetails
                     draft.title = initialTitle
                     draft.notes = initialNotes
-                } else { details.fields["Store"] = repository.listProfile(draft.listID).settings["Store Filter"] ?? ""; nameFocused = true }
+                } else { details.fields["Store"] = repository.shoppingCaptureStore(for: draft.listID); nameFocused = true }
             }
             if details.fields["Shopper"] == nil { details.fields["Shopper"] = repository.shoppingShopperName }
             refreshPriceRecall()
@@ -1728,6 +2530,15 @@ struct SpecializedListOptions: View {
             Form {
                 if type == .shopping {
                     NavigationLink("Categories & Aisle Order") { ShoppingCategoryManager(repository: repository, listID: listID) }
+                    Section {
+                        ShoppingDefaultStorePicker(repository: repository, listID: listID, selection: Binding(get: { repository.listProfile(listID).settings["Default Store"] ?? "" }, set: { value in
+                            var profile = repository.listProfile(listID)
+                            profile.settings["Default Store"] = value
+                            repository.setListProfile(profile, for: listID)
+                        }))
+                    } footer: {
+                        Text("New items use this store unless you select another store filter. You can change the store on each item; existing items keep their stores.")
+                    }
                     Section("Shopping Budget") {
                         TextField("Optional budget", text: Binding(get: { repository.listProfile(listID).settings["Shopping Budget"] ?? "" }, set: { value in
                             var profile = repository.listProfile(listID); profile.settings["Shopping Budget"] = value; repository.setListProfile(profile, for: listID)
@@ -1754,7 +2565,7 @@ struct SpecializedListOptions: View {
                 }
                 Section {
                     if type == .reading {
-                        Toggle("Show Thumbnails", isOn: Binding(get: { repository.listProfile(listID).settings["Show Thumbnails"] == "true" }, set: { enabled in
+                        Toggle("Show Thumbnails", isOn: Binding(get: { repository.listProfile(listID).settings["Show Thumbnails"] != "false" }, set: { enabled in
                             var profile = repository.listProfile(listID); profile.settings["Show Thumbnails"] = String(enabled); repository.setListProfile(profile, for: listID)
                         }))
                     }
@@ -1765,7 +2576,7 @@ struct SpecializedListOptions: View {
                             repository.setListProfile(profile, for: listID)
                         }))
                     }
-                } header: { Text("Visible Optional Fields") } footer: { Text("Hidden fields keep their saved values.") }
+                } header: { Text("Visible Optional Fields") } footer: { Text("Hidden fields keep their saved values. " + type.syncExplanation) }
             }
             .taskFlowThemedBackground()
             .navigationTitle("Customize List")
@@ -1811,7 +2622,7 @@ struct ShoppingBulkCapture: View {
         guard !saving else { return }
         let entries = parsed
         let suggestions = entries.map { SpecializedListTemplate.Item(title: $0.title, notes: "", details: .init(fields: ["Quantity": $0.quantity, "Category": $0.category])) }
-        let store = repository.listProfile(listID).settings["Store Filter"] ?? repository.listProfile(listID).settings["Last Store"] ?? ""
+        let store = repository.shoppingCaptureStore(for: listID)
         if !confirmed, repository.shoppingHasDuplicates(suggestions, listID: listID, store: store) { showingDuplicates = true; return }
         saving = true
         Task {
@@ -1832,18 +2643,7 @@ struct SpecializedTemplateManager: View {
     @State private var pendingDelete: SpecializedListTemplate?
     @State private var starting = false
     private var type: SpecializedListType { repository.listProfile(listID).type }
-    private var starters: [(String, [String])] {
-        switch type {
-        case .shopping: [("Grocery Staples", ["Milk", "Eggs", "Bread", "Apples", "Rice", "Coffee"])]
-        case .household: [("Weekly Home Reset", ["Kitchen: Clean counters", "Bathroom: Clean sink", "Laundry: Wash towels", "Living Room: Vacuum"]), ("Seasonal Home Care", ["Replace air filters", "Check smoke detectors", "Clean gutters"])]
-        case .packing: [("Weekend Trip", ["Travel documents", "Medication", "Phone charger", "Clothes", "Toiletries"]), ("Business Trip", ["Travel documents", "Laptop", "Laptop charger", "Work clothes", "Medication"])]
-        case .appointments: [("Appointment Preparation", ["Confirm time and location", "Prepare questions", "Bring documents", "Record outcome", "Schedule follow-up"])]
-        case .routines: [("Morning Routine", ["Review today's plan", "Prepare essentials", "Start priority task"]), ("Evening Reset", ["Review completed tasks", "Prepare for tomorrow", "Tidy workspace"])]
-        case .projects: [("Project Kickoff", ["Define outcome", "Break into milestones", "Choose next action", "Review progress"])]
-        case .errands: [("Before You Leave", ["Check opening hours", "Bring returns and receipts", "Check shopping list"])]
-        default: []
-        }
-    }
+    private var starters: [(String, [String])] { type.starterSets }
     var body: some View {
         NavigationStack {
             List {
@@ -1858,20 +2658,9 @@ struct SpecializedTemplateManager: View {
                 }
                 if !starters.isEmpty {
                     Section("Starter Templates") {
-                        ForEach(starters, id: \.0) { title, names in
+                        ForEach(starters, id: \.0) { title, _ in
                             Button(title) {
-                                var template = SpecializedListTemplate(title: title, listID: listID, items: [])
-                                template.items = names.enumerated().map { index, name in
-                                    var details = SpecializedTaskDetails()
-                                    if type == .shopping { details.fields["Category"] = ShoppingCatalog.category(for: name) }
-                                    if type == .routines { details.fields["Step Order"] = String(index + 1) }
-                                    if type == .packing { details.fields["Essential"] = ["Travel documents", "Medication"].contains(name) ? "Yes" : "No" }
-                                    if type == .household {
-                                        details.fields["Season"] = title.contains("Seasonal") ? "Seasonal" : "Weekly"
-                                        if let room = name.split(separator: ":").first, name.contains(":") { details.fields["Room"] = String(room) }
-                                    }
-                                    return .init(title: name, notes: "", details: details)
-                                }
+                                guard let index = starters.firstIndex(where: { $0.0 == title }), let template = type.starterTemplate(index: index, listID: listID) else { return }
                                 repository.listTemplates.append(template)
                                 repository.updateListTemplate(template)
                                 editing = template
@@ -2053,10 +2842,18 @@ struct ReadingLinkCapture: View {
     @State private var metadata: ReadingLinkMetadata?
     @State private var fetching = false
     /// The title last filled in from the page, so a user-typed title is never replaced.
+    @State private var mergeIntoID = ""
     @State private var autoTitle = ""
+    @State private var streamingService = ""
+    @State private var note = ""
     private var url: URL? {
         guard let url = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
         return url
+    }
+    private var duplicateMatches: [TaskItem] {
+        guard let url else { return [] }
+        let fields = (metadata?.fields ?? [:]).merging(["Source Link": url.absoluteString]) { _, new in new }
+        return repository.mediaDuplicates(title: title, fields: fields, listID: listID)
     }
     var body: some View {
         NavigationStack {
@@ -2073,13 +2870,26 @@ struct ReadingLinkCapture: View {
                         TextField("Title", text: $title)
                         if fetching { ProgressView() }
                     }
-                } footer: { Text("Paste a link to an article, book, or video. TaskFlow fills in the title and details from the page.") }
+                    Picker("Streaming Service (optional)", selection: $streamingService) {
+                        Text("Automatic").tag("")
+                        ForEach(repository.streamingServiceChoices, id: \.self) { Text($0).tag($0) }
+                    }
+                    TextField("Optional note", text: $note, axis: .vertical).lineLimit(1...3)
+                    LabeledContent("Destination", value: repository.lists.first { $0.id == listID }?.title ?? "Reading list")
+                } footer: { Text("Save immediately. Missing previews and details are fetched after saving.") }
+                if !duplicateMatches.isEmpty {
+                    Section {
+                        Picker("Save As", selection: $mergeIntoID) {
+                            Text("New Entry").tag("")
+                            ForEach(duplicateMatches) { Text("Add link to " + $0.title).tag($0.id) }
+                        }
+                    } header: { Text("Similar Title Already Saved") } footer: { Text("Choose an existing entry to combine provider links. Titles can identify different releases, so review before combining.") }
+                }
                 if let metadata, !metadata.fields.isEmpty {
                     Section("From the Page") {
                         HStack(alignment: .top, spacing: 12) {
                             if let thumbnail = metadata.thumbnailURL {
-                                AsyncImage(url: thumbnail) { image in image.resizable().scaledToFill() } placeholder: { Color.secondary.opacity(0.15) }
-                                    .frame(width: 56, height: 72).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
+                                CachedMediaPreview(rawURL: thumbnail.absoluteString, format: metadata.format)
                             }
                             VStack(alignment: .leading, spacing: 4) {
                                 if !metadata.creator.isEmpty { Text(metadata.creator).font(.subheadline) }
@@ -2094,13 +2904,13 @@ struct ReadingLinkCapture: View {
             .taskFlowThemedBackground()
             .navigationTitle("Save a Link")
             .interactiveDismissDisabled(saving)
-            .task(id: link) { await lookUp() }
+            .task(id: link) { mergeIntoID = ""; await lookUp() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") {
                     guard let url else { return }; saving = true
-                    Task { if await repository.addReadingLink(title: title, url: url, listID: listID, metadata: metadata) { dismiss() }; saving = false }
-                }.disabled(saving || url == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                    Task { if await repository.addReadingLink(title: title, url: url, listID: listID, metadata: metadata, note: note, mergeIntoID: duplicateMatches.contains(where: { $0.id == mergeIntoID }) ? mergeIntoID : nil, streamingService: streamingService) { dismiss() }; saving = false }
+                }.disabled(saving || url == nil) }
             }
         }
     }
@@ -2184,16 +2994,17 @@ private struct ShoppingPriceEditor: View {
     @Bindable var repository: TaskRepository
     let task: TaskItem
     @Environment(\.dismiss) private var dismiss
-    @State private var price: Double?
+    @State private var text = ""
     @State private var loaded = false
     @State private var saving = false
     @State private var error: String?
     @FocusState private var focused: Bool
+    private var price: Double? { ShoppingPriceInput.value(text) }
     var body: some View {
         NavigationStack {
             Form {
                 Section(task.title) {
-                    TextField("Estimated Price per Unit", value: $price, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                    TextField("Estimated Price per Unit", text: $text)
                         .keyboardType(.decimalPad).focused($focused)
                 }
                 Section {
@@ -2223,7 +3034,8 @@ private struct ShoppingPriceEditor: View {
             .onAppear {
                 guard !loaded else { return }; loaded = true
                 let fields = repository.specializedDetails(task).fields
-                price = Double(fields["Price"] ?? "") ?? repository.rememberedShoppingPrice(title: task.title, fields: fields)
+                let savedPrice = Double(fields["Price"] ?? "") ?? repository.rememberedShoppingPrice(title: task.title, fields: fields)
+                text = savedPrice.map { $0.formatted(.number.grouping(.never)) } ?? ""
                 focused = true
             }
         }
@@ -2314,5 +3126,164 @@ private struct ShoppingPriceEntryMode: View {
             } else { error = repository.errorMessage ?? "The price could not be saved. Please try again." }
             saving = false
         }
+    }
+}
+
+/// Disk-backed previews keep a fixed footprint while loading and work offline.
+actor ReadingThumbnailCache {
+    static let shared = ReadingThumbnailCache()
+    private let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("ReadingPreviews", isDirectory: true)
+
+    nonisolated static func thumbnail(_ data: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 640,
+                kCGImageSourceCreateThumbnailWithTransform: true
+              ] as CFDictionary) else { return nil }
+        return UIImage(cgImage: image).jpegData(compressionQuality: 0.8)
+    }
+
+    func data(for url: URL) async -> Data? {
+        guard url.scheme?.lowercased() == "https" else { return nil }
+        let name = SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+        let file = directory.appendingPathComponent(name)
+        if let cached = try? Data(contentsOf: file), let thumbnail = Self.thumbnail(cached) { return thumbnail }
+        var request = URLRequest(url: url, timeoutInterval: 12)
+        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        guard let (stream, response) = try? await URLSession.shared.bytes(for: request),
+              response.url?.scheme?.lowercased() == "https",
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              response.mimeType?.hasPrefix("image/") == true else { return nil }
+        var raw = Data()
+        do {
+            for try await byte in stream {
+                guard !Task.isCancelled, raw.count < 8_000_000 else { return nil }
+                raw.append(byte)
+            }
+        } catch { return nil }
+        guard let data = Self.thumbnail(raw) else { return nil }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
+        if let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) {
+            let ordered = files.sorted {
+                ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+            }
+            var bytes = files.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+            var count = files.count
+            for old in ordered {
+                guard count > 120 || bytes > 64_000_000 else { break }
+                bytes -= (try? old.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                count -= 1
+                try? FileManager.default.removeItem(at: old)
+            }
+        }
+        return data
+    }
+}
+
+struct CachedMediaPreview: View {
+    let rawURL: String?
+    let format: String
+    var expanded = false
+    var localPreview: String? = nil
+    var poster = false
+    @State private var image: UIImage?
+    private var isAudio: Bool { ReadingMedia.action(for: format) == "Listen" }
+    private var aspect: Double { ReadingMedia.artworkAspect(width: Double(image?.size.width ?? 0), height: Double(image?.size.height ?? 0), format: format) }
+    private var previewHeight: CGFloat { poster && !expanded ? 108 : expanded ? (aspect < 0.9 ? 200 : 144) : (aspect < 0.9 ? 80 : 64) }
+    private var previewWidth: CGFloat { poster && !expanded ? 72 : previewHeight * aspect }
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12))
+            if let image {
+                if poster && !expanded {
+                    Image(uiImage: image).resizable().scaledToFill().frame(width: previewWidth, height: previewHeight).clipped()
+                } else { Image(uiImage: image).resizable().scaledToFit() }
+            }
+            else { Image(systemName: ReadingMedia.symbol(for: format)).foregroundStyle(.secondary) }
+        }
+        .frame(width: previewWidth, height: previewHeight)
+        .clipped().clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityHidden(true)
+        .task(id: (rawURL ?? "") + (localPreview ?? "")) {
+            image = nil
+            if let data = ReadingMedia.capturePreviewData(localPreview), let preview = UIImage(data: data) { image = preview; return }
+            guard let rawURL, let url = URL(string: rawURL), let data = await ReadingThumbnailCache.shared.data(for: url), !Task.isCancelled else { return }
+            image = UIImage(data: data)
+        }
+    }
+}
+
+
+struct ListCleanupView: View {
+    @Bindable var repository: TaskRepository
+    let listID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: Set<String> = []
+    @State private var pending: Set<String> = []
+    @State private var deleting = false
+    private var items: [TaskItem] { repository.tasks.filter { $0.listID == listID }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending } }
+    private var completed: Set<String> { Set(items.filter(\.isCompleted).map(\.id)) }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Choose individual items or remove completed items in one step. This includes items hidden by your list filters.").font(.footnote).foregroundStyle(.secondary)
+                    Button("Delete Completed (\(completed.count))", systemImage: "trash", role: .destructive) { prepare(completed) }.disabled(completed.isEmpty)
+                    Button("Delete Selected (\(selected.count))", systemImage: "trash", role: .destructive) { prepare(selected) }.disabled(selected.isEmpty)
+                    Button("Delete All Items (\(items.count))", systemImage: "trash", role: .destructive) { prepare(Set(items.map(\.id))) }.disabled(items.isEmpty)
+                    if let action = repository.taskUndo {
+                        Button("Undo " + action.message, systemImage: "arrow.uturn.backward") {
+                            deleting = true
+                            Task { await repository.undoLastTaskAction(); deleting = false }
+                        }
+                    }
+                    if let error = repository.errorMessage { Text(error).foregroundStyle(.red) }
+                }
+                Section("Select Items") {
+                    ForEach(items) { item in
+                        Button {
+                            if !selected.insert(item.id).inserted { selected.remove(item.id) }
+                        } label: {
+                            HStack {
+                                Image(systemName: selected.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                VStack(alignment: .leading) {
+                                    Text(item.title).foregroundStyle(.primary)
+                                    Text(item.isCompleted ? "Completed" : "Open").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }.accessibilityLabel(item.title + (selected.contains(item.id) ? ", selected" : ", not selected"))
+                    }
+                }
+            }
+            .disabled(deleting || repository.isUndoing)
+            .navigationTitle("Clean Up Items")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(deleting) } }
+            .interactiveDismissDisabled(deleting)
+            .confirmationDialog("Delete \(pending.count) items?", isPresented: Binding(get: { !pending.isEmpty }, set: { if !$0 { pending = [] } }), titleVisibility: .visible) {
+                Button("Delete \(pending.count) Items", role: .destructive) {
+                    let ids = pending.intersection(Set(items.map(\.id)))
+                    pending = []
+                    deleting = true
+                    Task {
+                        await repository.deleteTasks(ids)
+                        selected.subtract(ids)
+                        deleting = false
+                    }
+                }
+                Button("Cancel", role: .cancel) { pending = [] }
+            } message: { Text("Items are deleted from Apple Reminders and synced devices. Selected parent items include their subtasks. The list itself stays. Undo is available after deletion.") }
+        }
+    }
+    private func prepare(_ ids: Set<String>) {
+        var expanded = ids.intersection(Set(items.map(\.id)))
+        while true {
+            let children = Set(items.filter { $0.parentID.map { expanded.contains($0) } == true }.map(\.id))
+            let next = expanded.union(children)
+            if next == expanded { break }
+            expanded = next
+        }
+        pending = expanded
     }
 }

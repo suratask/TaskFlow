@@ -77,6 +77,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .background { TaskFlowAppDelegate.scheduleWatchRefresh() }
             guard phase == .active else { return }
             Task {
                 await repository.reloadExternalData()
@@ -292,28 +293,42 @@ struct ContentView: View {
                 defaults.set(Array(current.dropFirst(notes.count)), forKey: "TaskFlow.pendingSharedNotes")
             }
         }
-        if let defaults = UserDefaults(suiteName: "group.com.surratt.TaskFlow"),
-           let links = defaults.stringArray(forKey: "TaskFlow.pendingReadingLinks"), !links.isEmpty,
-           !isImportingReadingLinks, repository.accessState == .granted {
+        for capture in TextShareCapture.pending() where capture.kind == "Note" {
+            // Stable IDs make an interrupted import safe to retry.
+            var note = QuickNote(text: capture.text)
+            note.id = capture.id
+            if repository.quickNotes.contains(where: { $0.id == capture.id }) || repository.saveNoteSnapshot(note) { capture.acknowledge() }
+        }
+        if !showsSharedCapture, editorDraft == nil, sharedEventDraft == nil,
+           let capture = TextShareCapture.pending().first(where: { $0.kind != "Note" }) {
+            sharedCaptureText = capture.text
+            sharedCaptureKind = capture.kind
+            capture.acknowledge()
+            showsSharedCapture = true
+        }
+        let mediaDefaults = ReadingMedia.defaults
+        let legacyLinks = mediaDefaults.stringArray(forKey: "TaskFlow.pendingReadingLinks") ?? []
+        if !isImportingReadingLinks, repository.accessState == .granted,
+           !legacyLinks.isEmpty || !ReadingMedia.captures().isEmpty {
             isImportingReadingLinks = true
             Task {
                 defer { isImportingReadingLinks = false }
                 var unsaved: [String] = []
-                for link in links {
-                    guard let url = URL(string: link) else { continue }
+                for link in legacyLinks {
+                    guard let url = URL(string: link) else { unsaved.append(link); continue }
                     if !(await repository.addSharedReadingLink(url)) { unsaved.append(link) }
                 }
-                let current = defaults.stringArray(forKey: "TaskFlow.pendingReadingLinks") ?? []
-                defaults.set(Array(current.dropFirst(links.count)), forKey: "TaskFlow.pendingReadingLinks")
-                // Without a Reading list, offer the link as a regular capture instead of dropping it.
-                if repository.preferredReadingListID == nil, let first = unsaved.first, defaults.dictionary(forKey: "TaskFlow.pendingShareCapture") == nil {
-                    sharedCaptureText = first
-                    sharedCaptureKind = "Task"
-                    showsSharedCapture = true
+                let current = mediaDefaults.stringArray(forKey: "TaskFlow.pendingReadingLinks") ?? []
+                mediaDefaults.set(unsaved + Array(current.dropFirst(legacyLinks.count)), forKey: "TaskFlow.pendingReadingLinks")
+                for capture in ReadingMedia.captures() {
+                    if await repository.importMediaCapture(capture) { ReadingMedia.acknowledge(capture.id) }
+                }
+                if repository.preferredReadingListID == nil {
+                    repository.errorMessage = "Create a Reading & Watch Later list to import your saved links. Your links are still saved."
                 }
             }
         }
-        guard let defaults = UserDefaults(suiteName: "group.com.surratt.TaskFlow"),
+        guard !showsSharedCapture, let defaults = UserDefaults(suiteName: "group.com.surratt.TaskFlow"),
               let payload = defaults.dictionary(forKey: "TaskFlow.pendingShareCapture"),
               let text = payload["text"] as? String, !text.isEmpty else { return }
         sharedCaptureText = text
@@ -470,6 +485,8 @@ private struct OnboardingView: View {
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
                 }
+
+                NavigationLink("Set Up TaskFlow") { GuidedSetupView(repository: repository) }
 
                 Section("What You Can Do") {
                     ForEach(features) { page in

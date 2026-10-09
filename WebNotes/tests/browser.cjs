@@ -1,0 +1,44 @@
+const { chromium } = require(process.env.PLAYWRIGHT_PATH || '/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/playwright');
+const assert = require('node:assert/strict');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true});
+  try {
+    const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+    const errors = []; page.on('pageerror', error => errors.push(error.message));
+    await page.goto('http://127.0.0.1:8765/');
+    await page.getByRole('button', {name: 'Continue with iCloud'}).click();
+    await page.getByText('iCloud access is being prepared.').waitFor();
+    await page.getByRole('button', {name: 'Explore with sample notes'}).click();
+    await page.getByRole('button', {name: 'A place for your ideas', exact: false}).click();
+    await page.screenshot({path: '.build/validation/web-notes-desktop.png', fullPage: true});
+    await page.getByRole('button', {name: 'New note', exact: true}).click();
+    await page.getByRole('textbox', {name: 'Note title', exact: true}).fill('Browser regression note');
+    await page.getByRole('textbox', {name: 'Note content', exact: true}).fill('One word here\n<script>window.unwanted=true</script>');
+    await page.locator('#note-body').evaluate(el => { window.Quill.find(el).setSelection(4, 4); });
+    await page.getByRole('button', {name: 'Bold selected text'}).click();
+    assert.equal(await page.locator('#note-body strong').textContent(), 'word');
+    await page.getByRole('button', {name: 'Save Now'}).click();
+    await page.getByRole('button', {name: 'Preview', exact: true}).click();
+    assert.equal(await page.locator('#note-preview strong').textContent(), 'word');
+    assert.equal(await page.evaluate(() => window.unwanted), undefined);
+    await page.getByRole('button', {name: 'Pin', exact: true}).click();
+    await page.getByRole('button', {name: 'Save Now'}).click();
+    await page.getByRole('button', {name: 'Move to Trash', exact: true}).click();
+    await page.getByRole('button', {name: 'Trash', exact: true}).click();
+    await page.getByRole('button', {name: 'Browser regression note', exact: false}).click();
+    await page.getByRole('button', {name: 'Restore Note', exact: true}).click();
+    await page.getByRole('button', {name: 'Trash', exact: true}).click();
+    await page.getByRole('searchbox', {name: 'Search notes'}).fill('Browser regression');
+    assert.equal(await page.locator('.note-card').count(), 1);
+    await page.getByRole('searchbox', {name: 'Search notes'}).fill('');
+    await page.setViewportSize({width: 390, height: 844});
+    await page.screenshot({path: '.build/validation/web-notes-mobile.png', fullPage: true});
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await page.getByRole('button', {name: 'Sign Out', exact: true}).click();
+    await page.locator('#welcome').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#note-body .ql-editor').innerText(), '');
+    assert.equal(await page.locator('.note-card').count(), 0);
+    assert.deepEqual(errors, []);
+    console.log('Browser checks passed: create, selected-word formatting, autosave, safe preview, pin, trash, restore, search, mobile layout, sign-out clearing.');
+  } finally { await browser.close(); }
+})().catch(error => {console.error(error); process.exitCode = 1;});

@@ -19,6 +19,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                NavigationLink("Set Up TaskFlow") { GuidedSetupView(repository: repository) }
                 SettingsPermissionsSection(repository: repository)
 
                 Section("Shopping") {
@@ -36,6 +37,21 @@ struct SettingsView: View {
                     Button("Cancel", role: .cancel) { newShopperName = "" }
                     Button("Add") { repository.selectShoppingShopper(newShopperName); newShopperName = "" }
                         .disabled(newShopperName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                Section("Share Extension") {
+                    ForEach([false, true], id: \.self) { watch in
+                        Picker(watch ? "Watch Later List" : "Read Later List", selection: Binding(get: {
+                            ReadingMedia.defaults.string(forKey: ReadingMedia.preferenceKey(watch: watch)) ?? ""
+                        }, set: { ReadingMedia.defaults.set($0, forKey: ReadingMedia.preferenceKey(watch: watch)) })) {
+                            Text("Automatic").tag("")
+                            ForEach(repository.lists.filter { repository.listProfile($0.id).type == .reading }) { list in
+                                Text(list.title).tag(list.id)
+                            }
+                        }
+                    }
+                    Text("Shared videos default to Watch Later; articles and other links default to Read Later. Choose any Reading & Watch Later list. Links are kept safely until TaskFlow opens and imports them.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
 
                 Section("iCloud Sync") {
@@ -120,9 +136,13 @@ struct SettingsView: View {
                             }
 
                             NavigationLink("Edit Reminder Lists") {
-                                List(repository.lists) { list in
-                                    NavigationLink { ReminderListSettings(repository: repository, list: list) } label: { Label(list.title, systemImage: repository.listIcon(for: list.id)).foregroundStyle(list.color) }
-                                }.navigationTitle("Reminder Lists")
+                                List {
+                                    ForEach(repository.lists) { list in
+                                        NavigationLink { ReminderListSettings(repository: repository, list: list) } label: { Label(list.title, systemImage: repository.listIcon(for: list.id)).foregroundStyle(list.color) }
+                                    }.onMove { repository.moveLists(fromOffsets: $0, toOffset: $1) }
+                                }
+                                .navigationTitle("Reminder Lists")
+                                .toolbar { EditButton() }
                             }
                             if repository.lists.isEmpty {
                                 Text("Enable Reminders access or create a list before choosing a default.")
@@ -165,6 +185,8 @@ struct SettingsView: View {
                                         }
                                     }
 
+                                    Button("Use my calendars") { Task { await repository.useMyCalendars() } }
+                                    DisclosureGroup("Customize") {
                                     ForEach(repository.eventCalendars) { calendar in
                                         Toggle(isOn: eventCalendarSelection(for: calendar)) {
                                             HStack(spacing: 12) {
@@ -174,6 +196,7 @@ struct SettingsView: View {
                                                 Text(calendar.title)
                                             }
                                         }
+                                    }
                                     }
                                 }
                             } else {
@@ -393,29 +416,54 @@ struct ReminderListSettings: View {
     @State private var color = Color.blue
     @State private var icon = "list.bullet"
     @State private var profile = SpecializedListProfile()
+    @State private var includeStarter = false
+    @State private var starterIndex = 0
     @State private var initialized = false
     @State private var saving = false
     @State private var error = ""
     var body: some View {
         Form {
             TextField("List name", text: $title)
-            Picker("List Type", selection: $profile.type) {
-                ForEach(SpecializedListType.allCases) { type in Label(type.rawValue, systemImage: type.icon).tag(type) }
+            Section {
+                NavigationLink { ListTypeChooser(selection: $profile.type) } label: {
+                    LabeledContent("List Type", value: profile.type.rawValue)
+                }
+                if profile.type == .standard, let suggestion = SpecializedListType.suggested(for: title) {
+                    Button("Use \(suggestion.rawValue) Layout", systemImage: suggestion.icon) { profile.type = suggestion }
+                }
+                Text(profile.type.shortDescription).font(.subheadline).foregroundStyle(.secondary)
+                ListTypeSample(type: profile.type)
+                if !profile.type.fields.isEmpty { Text("Example fields: " + profile.type.fields.prefix(4).joined(separator: ", ")).font(.caption).foregroundStyle(.secondary) }
+            } footer: { Text(profile.type.syncExplanation) }
+            if !profile.type.starterSets.isEmpty {
+                Section {
+                    Toggle("Include Starter Template", isOn: $includeStarter)
+                    if includeStarter {
+                        Picker("Template", selection: $starterIndex) {
+                            ForEach(profile.type.starterSets.indices, id: \.self) { index in Text(profile.type.starterSets[index].0).tag(index) }
+                        }
+                        if profile.type.starterSets.indices.contains(starterIndex) {
+                            ForEach(profile.type.starterSets[starterIndex].1, id: \.self) { Text($0).font(.subheadline).foregroundStyle(.secondary) }
+                        }
+                    }
+                } footer: { Text("The template is saved under List Tools → Templates. Start it when you're ready; existing reminders stay as they are.") }
             }
             if profile.type == .packing {
                 TextField("Trip name", text: Binding(get: { profile.settings["Trip"] ?? "" }, set: { profile.settings["Trip"] = $0 }))
                 TextField("Travel dates", text: Binding(get: { profile.settings["Travel Dates"] ?? "" }, set: { profile.settings["Travel Dates"] = $0 }))
             }
             if profile.type == .shopping {
-                TextField("Aisle order (comma separated)", text: Binding(get: { profile.settings["Aisle Order"] ?? "" }, set: { profile.settings["Aisle Order"] = $0 }))
-            }
-            ColorPicker("Color", selection: $color, supportsOpacity: false)
-            Picker("Icon", selection: $icon) {
-                ForEach(TaskRepository.listIconChoices, id: \.self) { symbol in
-                    Label(symbol.replacingOccurrences(of: ".", with: " ").capitalized, systemImage: symbol).tag(symbol)
+                NavigationLink("Categories & Aisle Order") { ShoppingCategoryManager(repository: repository, listID: list.id) }
+                Section {
+                    ShoppingDefaultStorePicker(repository: repository, listID: list.id, selection: Binding(get: { profile.settings["Default Store"] ?? "" }, set: { profile.settings["Default Store"] = $0 }))
+                } footer: {
+                    Text("New items use this store unless you select another store filter. You can change the store on each item; existing items keep their stores.")
                 }
             }
-            .pickerStyle(.navigationLink)
+            ColorPicker("Color", selection: $color, supportsOpacity: false)
+            NavigationLink { ListIconPicker(selection: $icon) } label: {
+                Label("List Icon", systemImage: icon)
+            }
             Label(title.isEmpty ? "List Preview" : title, systemImage: icon)
                 .font(.title3).foregroundStyle(color)
             Text("Name and color sync with Apple Reminders. The icon is saved in TaskFlow on this device.").font(.footnote).foregroundStyle(.secondary)
@@ -426,7 +474,14 @@ struct ReminderListSettings: View {
                     let saved = (title == list.title && color == list.color) ? true : await repository.updateList(id: list.id, title: title, color: color)
                     if saved {
                         repository.setListIcon(icon, for: list.id)
+                        // Category settings may have changed in their own manager while this form was open.
+                        let latest = repository.listProfile(list.id)
+                        for key in ["Shopping Categories", "Shopping Category Orders", "Aisle Order"] { profile.settings[key] = latest.settings[key] }
                         repository.setListProfile(profile, for: list.id)
+                        if includeStarter, let template = profile.type.starterTemplate(index: starterIndex, listID: list.id) {
+                            repository.listTemplates.append(template)
+                            repository.updateListTemplate(template)
+                        }
                         dismiss()
                     }
                     else { error = repository.errorMessage ?? "Unable to save list." }
@@ -436,6 +491,7 @@ struct ReminderListSettings: View {
         }
         .taskFlowThemedBackground()
         .navigationTitle("Edit List")
+        .onChange(of: profile.type) { includeStarter = false; starterIndex = 0 }
         .onAppear {
             guard !initialized else { return }
             initialized = true
@@ -616,5 +672,75 @@ private struct SettingsPermissionsSection: View {
         case .authorized: "Allowed"
         @unknown default: "Unknown"
         }
+    }
+}
+
+
+struct ShoppingDefaultStorePicker: View {
+    let repository: TaskRepository
+    let listID: String
+    @Binding var selection: String
+    @State private var adding = false
+    @State private var name = ""
+    private var choices: [String] {
+        Array(Set(repository.shoppingStores(for: listID) + (selection.isEmpty ? [] : [selection]))).sorted()
+    }
+    var body: some View {
+        Picker("Default Store", selection: $selection) {
+            Text("None").tag("")
+            ForEach(choices, id: \.self) { Text($0).tag($0) }
+        }
+        Button("Add Store", systemImage: "plus") { name = ""; adding = true }
+            .alert("Add Store", isPresented: $adding) {
+                TextField("Store name", text: $name)
+                Button("Cancel", role: .cancel) {}
+                Button("Add") { selection = name.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+    }
+}
+
+struct GuidedSetupView: View {
+    @Bindable var repository: TaskRepository
+    @State private var settingUp = false
+    @State private var attempted = false
+    var body: some View {
+        Form {
+            Section {
+                Text("Connect your reminders and calendars, then choose layouts for your lists. You can change these choices later.")
+                Button(settingUp ? "Setting up…" : "Set Up TaskFlow") {
+                    settingUp = true
+                    Task {
+                        if repository.accessState != .granted { await repository.requestAccess() }
+                        await repository.useMyCalendars()
+                        settingUp = false
+                        attempted = true
+                    }
+                }.disabled(settingUp)
+                if attempted {
+                    Label(repository.accessState == .granted ? "Reminders connected" : "Allow Reminders in Settings to connect your lists", systemImage: repository.accessState == .granted ? "checkmark.circle" : "exclamationmark.circle")
+                    Label(repository.eventAccessState == .granted ? "Calendars connected" : "Calendar access is optional; enable it in Settings", systemImage: repository.eventAccessState == .granted ? "checkmark.circle" : "calendar")
+                }
+            }
+            Section("Suggested List Layouts") {
+                ForEach(repository.lists) { list in
+                    if let suggestion = SpecializedListType.suggested(for: list.title), repository.listProfile(list.id).type == .standard {
+                        Button {
+                            var profile = repository.listProfile(list.id)
+                            profile.type = suggestion
+                            repository.setListProfile(profile, for: list.id)
+                        } label: {
+                            Label("Use \(suggestion.rawValue) for \(list.title)", systemImage: suggestion.icon)
+                        }
+                    }
+                }
+                Text("Suggestions change the layout and keep your existing items.").font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Shopping Defaults") {
+                ForEach(repository.lists.filter { repository.listProfile($0.id).type == .shopping }) { list in
+                    NavigationLink(list.title) { ReminderListSettings(repository: repository, list: list) }
+                }
+            }
+        }.navigationTitle("Set Up TaskFlow")
     }
 }

@@ -1,0 +1,6 @@
+/notes/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://cdn.apple-cloudkit.com; connect-src 'self' https://*.apple-cloudkit.com https://*.icloud.com https://*.apple.com; frame-src https://*.icloud.com https://*.apple.com; img-src 'self' data: https://*.apple.com https://*.icloud.com https://*.apple-cloudkit.com; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  Cache-Control: no-store
+  X-Robots-Tag: noindex
