@@ -810,6 +810,66 @@ struct TodayDashboardView: View {
 
 
 /// Reminders-style "New Task" row: type a title, press Return, and keep going.
+/// Shows what quick add understood: the typed text with recognized parts colored, plus a chip for each.
+struct QuickAddHighlights: View {
+    let text: String
+    let parse: QuickAddParse
+
+    var body: some View {
+        if !parse.tokens.isEmpty {
+            VStack(alignment: .leading, spacing: TaskFlowTheme.Spacing.xSmall) {
+                Text(highlighted).font(.subheadline).lineLimit(2)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: TaskFlowTheme.Spacing.xSmall) {
+                        ForEach(Array(parse.tokens.enumerated()), id: \.offset) { _, token in
+                            Label(token.display, systemImage: Self.icon(token.kind))
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, TaskFlowTheme.Spacing.small).padding(.vertical, TaskFlowTheme.Spacing.xSmall)
+                                .foregroundStyle(Self.color(token.kind))
+                                .background(Self.color(token.kind).opacity(0.15), in: Capsule())
+                        }
+                    }
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Recognized " + parse.tokens.map(\.display).joined(separator: ", "))
+        }
+    }
+
+    private var highlighted: AttributedString {
+        var result = AttributedString(text)
+        for token in parse.tokens {
+            guard let lower = AttributedString.Index(token.range.lowerBound, within: result),
+                  let upper = AttributedString.Index(token.range.upperBound, within: result), lower < upper else { continue }
+            result[lower..<upper].foregroundColor = Self.color(token.kind)
+            result[lower..<upper].font = .subheadline.weight(.semibold)
+        }
+        return result
+    }
+
+    static func icon(_ kind: QuickAddParse.Kind) -> String {
+        switch kind {
+        case .date: "calendar"
+        case .tag: "number"
+        case .priority: "exclamationmark"
+        case .list: "list.bullet"
+        case .alert: "bell"
+        case .flag: "flag.fill"
+        }
+    }
+
+    static func color(_ kind: QuickAddParse.Kind) -> Color {
+        switch kind {
+        case .date: .blue
+        case .tag: .purple
+        case .priority: .red
+        case .list: .teal
+        case .alert: .indigo
+        case .flag: TaskFlowTheme.flagged
+        }
+    }
+}
+
 struct InlineNewTaskRow: View {
     enum DueChoice: String, CaseIterable, Identifiable {
         case none = "No Date"
@@ -829,14 +889,19 @@ struct InlineNewTaskRow: View {
     @State private var isFlagged = false
     @FocusState private var isFocused: Bool
 
+    private var parsed: QuickAddParse {
+        QuickAddParser.parse(title, lists: repository.lists.map { (id: $0.id, title: $0.title) })
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: TaskFlowTheme.Spacing.xSmall) {
         HStack(spacing: 8) {
             Image(systemName: "circle")
                 .font(.title2)
                 .foregroundStyle(.tertiary)
                 .frame(width: 30)
                 .accessibilityHidden(true)
-            TextField("New Task", text: $title)
+            TextField("New Task  ·  try “tomorrow 9am #home !high”", text: $title)
                 .focused($isFocused)
                 .submitLabel(.done)
                 .onSubmit(add)
@@ -868,6 +933,8 @@ struct InlineNewTaskRow: View {
                 Image(systemName: "flag.fill").foregroundStyle(.orange).accessibilityLabel("Flagged")
             }
         }
+        if isFocused { QuickAddHighlights(text: title, parse: parsed).padding(.leading, 38) }
+        }
         .buttonStyle(.borderless)
         .id(InlineNewTaskRow.scrollID)
     }
@@ -877,18 +944,29 @@ struct InlineNewTaskRow: View {
     private var effectiveDue: DueChoice { due ?? defaultDue }
 
     private func makeDraft() -> TaskDraft {
+        let parsed = self.parsed
         var draft = repository.makeDraft()
-        draft.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.isFlagged = isFlagged || defaultFlagged
+        draft.title = parsed.title.isEmpty ? title.trimmingCharacters(in: .whitespacesAndNewlines) : parsed.title
+        draft.isFlagged = isFlagged || defaultFlagged || parsed.isFlagged
+        if let listID = parsed.listID { draft.listID = listID }
+        if let priority = parsed.priority { draft.priority = priority }
+        draft.tags = parsed.tags
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        switch effectiveDue {
-        case .none: draft.dueDate = nil
-        case .today: draft.dueDate = today
-        case .tomorrow: draft.dueDate = calendar.date(byAdding: .day, value: 1, to: today)
-        case .nextWeek: draft.dueDate = calendar.date(byAdding: .day, value: 7, to: today)
+        if let date = parsed.dueDate, due == nil {
+            // Words in the title ("tomorrow 9am") win over the row's default date.
+            draft.dueDate = date
+            draft.hasDueTime = parsed.hasDueTime
+            draft.alarmOffsetMinutes = parsed.alarmMinutes
+        } else {
+            switch effectiveDue {
+            case .none: draft.dueDate = nil
+            case .today: draft.dueDate = today
+            case .tomorrow: draft.dueDate = calendar.date(byAdding: .day, value: 1, to: today)
+            case .nextWeek: draft.dueDate = calendar.date(byAdding: .day, value: 7, to: today)
+            }
+            draft.hasDueTime = false
         }
-        draft.hasDueTime = false
         return draft
     }
 
@@ -1263,6 +1341,7 @@ struct SpecializedTaskListView: View {
     @State private var repeatPurchase: TaskItem?
     @State private var editingShoppingPrice: TaskItem?
     @State private var showingPriceEntry = false
+    @State private var showingReceiptScan = false
     @State private var priceEntryIDs: [String] = []
     @State private var pendingShoppingDelete: TaskItem?
     @State private var deletingShoppingIDs: Set<String> = []
@@ -1647,6 +1726,7 @@ struct SpecializedTaskListView: View {
         .sheet(isPresented: $showingBulkEditor) { ListBulkEditor(repository: repository, listID: listID, selectedIDs: $selectedIDs) }
         .sheet(isPresented: $showingSettings) { SpecializedListOptions(repository: repository, listID: listID) }
         .sheet(isPresented: $showingReadingCapture) { ReadingLinkCapture(repository: repository, listID: listID) }
+        .sheet(isPresented: $showingReceiptScan) { ReceiptScanSheet(repository: repository, listID: listID) }
         .sheet(isPresented: $showingPriceEntry) { ShoppingPriceEntryMode(repository: repository, itemIDs: priceEntryIDs) }
         .sheet(item: $editingShoppingPrice) { item in ShoppingPriceEditor(repository: repository, task: item) }
         .sheet(item: $repeatPurchase) { item in
@@ -1687,6 +1767,14 @@ struct SpecializedTaskListView: View {
                             Button(selectingItems ? "Done Selecting" : "Select Items", systemImage: "checkmark.circle") { selectingItems.toggle(); selectedIDs = [] }
                         }
                         if type == .shopping {
+                            Button("Fill Prices from History", systemImage: "wand.and.stars") {
+                                Task {
+                                    let filled = await repository.fillMissingShoppingPrices(listID: listID)
+                                    if filled == 0 { repository.errorMessage = "No remembered prices match these items yet. Scan a receipt or enter prices once and TaskFlow will remember them." }
+                                }
+                            }
+                            .disabled(unpricedShoppingItems.isEmpty || repository.isUndoing)
+                            Button("Scan Receipt", systemImage: "doc.viewfinder") { showingReceiptScan = true }
                             Button("Estimate Missing Prices", systemImage: "dollarsign.circle") { priceEntryIDs = unpricedShoppingItems.map(\.id); showingPriceEntry = true }
                                 .disabled(unpricedShoppingItems.isEmpty || repository.isUndoing)
                             Button("Categories & Aisle Order", systemImage: "arrow.up.arrow.down") { showingShoppingCategories = true }

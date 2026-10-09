@@ -2647,6 +2647,70 @@ final class TaskRepositoryTests: XCTestCase {
         XCTAssertTrue(NotificationScheduler.requests(for: [], deadlines: [past], now: now, calendar: calendar).isEmpty)
     }
 
+    func testQuickAddParserRecognizesEveryPart() {
+        let calendar = Calendar.current
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 9, hour: 8))!
+        let text = "Pay rent tomorrow 9am #bills !high @Home remind me 30 min before"
+        let parse = QuickAddParser.parse(text, lists: [(id: "home", title: "Home"), (id: "work", title: "Work")], now: now, calendar: calendar)
+        XCTAssertEqual(parse.title, "Pay rent")
+        XCTAssertEqual(parse.tags, ["bills"])
+        XCTAssertEqual(parse.priority, .high)
+        XCTAssertEqual(parse.listID, "home")
+        XCTAssertEqual(parse.alarmMinutes, 30)
+        XCTAssertTrue(parse.hasDueTime)
+        XCTAssertEqual(parse.dueDate.map { calendar.component(.hour, from: $0) }, 9)
+        XCTAssertEqual(Set(parse.tokens.map(\.kind)), [.date, .tag, .priority, .list, .alert])
+
+        let plain = QuickAddParser.parse("Wow! great idea !! #a #A", now: now, calendar: calendar)
+        XCTAssertEqual(plain.priority, .medium)          // "!!" alone, not the "!" inside "Wow!"
+        XCTAssertEqual(plain.tags, ["a"])                // case-insensitive duplicates collapse
+        XCTAssertEqual(plain.title, "Wow! great idea")
+        XCTAssertTrue(QuickAddParser.parse("Email Sam !flag", now: now).isFlagged)
+        XCTAssertNil(QuickAddParser.parse("Call @Nowhere", lists: [(id: "home", title: "Home")], now: now).listID)
+    }
+
+    func testReceiptParserReadsItemLinesAndSkipsTotals() {
+        let lines = ReceiptParser.lines(from: ["GV WHL MLK GAL 3.48 F", "BANANAS 1.29", "SUBTOTAL 24.10", "TAX 1.20", "EGGS LG 12CT $4.99", "VISA TEND 25.30", "2 @ 1.00", "Bread 2,49 A"])
+        XCTAssertEqual(lines, [
+            ReceiptLine(name: "GV WHL MLK GAL", price: 3.48), ReceiptLine(name: "BANANAS", price: 1.29),
+            ReceiptLine(name: "EGGS LG 12CT", price: 4.99), ReceiptLine(name: "Bread", price: 2.49)
+        ])
+        let matches = ReceiptParser.match(items: [(id: "milk", title: "Whole Milk"), (id: "banana", title: "Bananas"), (id: "eggs", title: "Eggs"), (id: "tea", title: "Green Tea")], lines: lines)
+        XCTAssertEqual(matches["milk"]?.price, 3.48)
+        XCTAssertEqual(matches["banana"]?.price, 1.29)
+        XCTAssertEqual(matches["eggs"]?.price, 4.99)
+        XCTAssertNil(matches["tea"])
+    }
+
+    func testShoppingTitleNormalizerIgnoresCaseAccentsAndPlurals() {
+        XCTAssertEqual(ShoppingTitleNormalizer.normalize("Eggs"), ShoppingTitleNormalizer.normalize("egg"))
+        XCTAssertEqual(ShoppingTitleNormalizer.normalize("Berries!"), "berry")
+        XCTAssertEqual(ShoppingTitleNormalizer.normalize("Tomatoes"), ShoppingTitleNormalizer.normalize("tomato"))
+        XCTAssertEqual(ShoppingTitleNormalizer.normalize("Crème Fraîche"), "creme fraiche")
+        XCTAssertEqual(ShoppingTitleNormalizer.normalize("Glass"), "glass")
+    }
+
+    func testDueTodaySummaryReadsNaturally() {
+        XCTAssertEqual(GetDueTodayIntent.summary(titles: [], overdue: 0), "Nothing is due today.")
+        XCTAssertEqual(GetDueTodayIntent.summary(titles: ["Pay rent"], overdue: 1), "You have 1 thing due today: Pay rent. 1 is overdue.")
+        XCTAssertEqual(GetDueTodayIntent.summary(titles: ["A", "B", "C", "D", "E"], overdue: 0), "You have 5 things due today: A, B, C, and 2 more.")
+    }
+
+    func testUpcomingGroupsTasksByDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 9, hour: 12))!
+        func dated(_ id: String, days: Int) -> TaskItem {
+            var item = task(id)
+            item.dueDate = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: now))
+            return item
+        }
+        let groups = TaskRepository.upcomingGroups([dated("later", days: 40), dated("today", days: 0), dated("late", days: -2), dated("tomorrow", days: 1), dated("soon", days: 3)], now: now, calendar: calendar)
+        XCTAssertEqual(groups.map(\.id).prefix(4), ["overdue", "today", "tomorrow", "day-3"])
+        XCTAssertTrue(groups.last?.id.hasPrefix("month-") == true)
+        XCTAssertEqual(groups.first?.tasks.map(\.id), ["late"])
+    }
+
     func testCalendarPreferencesClampOutOfRangeSyncedValues() throws {
         let json = #"{"workStart":23,"workEnd":5,"focusStart":-4,"focusEnd":99,"weekdays":[0,2,9],"hourHeight":0,"bufferMinutes":500}"#
         let settings = try JSONDecoder().decode(CalendarWorkspaceSettings.self, from: Data(json.utf8))

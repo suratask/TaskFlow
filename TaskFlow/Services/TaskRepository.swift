@@ -426,11 +426,65 @@ final class TaskRepository {
         for task in items.sorted(by: { ($0.modifiedAt ?? $0.createdAt ?? .distantPast) > ($1.modifiedAt ?? $1.createdAt ?? .distantPast) }) {
             guard listProfile(task.listID).type == .shopping || task.sharedShoppingDetails != nil else { continue }
             let fields = task.sharedShoppingDetails?.fields ?? specializedTasks[task.metadataID]?.fields ?? specializedTasks[task.id]?.fields ?? [:]
-            if rememberedShoppingPrice(title: task.title, fields: fields) == nil { rememberShoppingEstimate(title: task.title, fields: fields) }
+            if shoppingPriceHistory[shoppingPriceKey(title: task.title, fields: fields)] == nil { rememberShoppingEstimate(title: task.title, fields: fields) }
         }
     }
+    /// The exact remembered price (same name, store, and unit), else the closest estimate.
     func rememberedShoppingPrice(title: String, fields: [String: String]) -> Double? {
-        shoppingPriceHistory[shoppingPriceKey(title: title, fields: fields)]
+        shoppingPriceHistory[shoppingPriceKey(title: title, fields: fields)] ?? shoppingPriceEstimate(title: title, fields: fields)?.price
+    }
+
+    /// Looser matches when there's no exact price: a similar name ("Egg" for "Eggs") at the same store,
+    /// then the same item at another store. Units must match; the typical (median) price is used.
+    func shoppingPriceEstimate(title: String, fields: [String: String]) -> (price: Double, source: String)? {
+        let fold = { (value: String) in value.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX")) }
+        let currency = Locale.current.currency?.identifier ?? "USD"
+        let unit = fold(fields["Unit"] ?? ""), store = fold(fields["Store"] ?? "")
+        let wanted = ShoppingTitleNormalizer.normalize(title)
+        guard !wanted.isEmpty else { return nil }
+        var sameStore: [Double] = [], otherStores: [Double] = []
+        for (key, price) in shoppingPriceHistory {
+            let parts = key.components(separatedBy: "\u{001F}") // title, store, unit, currency
+            guard parts.count == 4, parts[3] == currency, parts[2] == unit, price.isFinite, price >= 0,
+                  ShoppingTitleNormalizer.normalize(parts[0]) == wanted else { continue }
+            if parts[1] == store { sameStore.append(price) } else { otherStores.append(price) }
+        }
+        func median(_ values: [Double]) -> Double? {
+            guard !values.isEmpty else { return nil }
+            let sorted = values.sorted()
+            return sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+        }
+        if let price = median(sameStore) { return (price, "Similar item") }
+        if let price = median(otherStores) { return (price, "Other stores") }
+        return nil
+    }
+
+    /// Fills every open, unpriced item in a shopping list that has a remembered or estimated price.
+    func fillMissingShoppingPrices(listID: String) async -> Int {
+        let candidates = tasks.filter { $0.listID == listID && !$0.isCompleted && $0.parentID == nil }
+        var filled = 0
+        for task in candidates {
+            var details = specializedDetails(task)
+            guard Double(details.fields["Price"] ?? "") == nil, let price = rememberedShoppingPrice(title: task.title, fields: details.fields) else { continue }
+            details.fields["Price"] = ShoppingQuantity.text(price)
+            if await saveSpecializedDetails(details, for: task, type: .shopping) { filled += 1 }
+        }
+        return filled
+    }
+
+    /// Saves per-unit prices read from a receipt and remembers them for next time.
+    func applyReceiptPrices(_ prices: [String: Double]) async -> Int {
+        var saved = 0
+        for (taskID, price) in prices {
+            guard price.isFinite, price >= 0, let task = currentTask(id: taskID) else { continue }
+            var details = specializedDetails(task)
+            details.fields["Price"] = ShoppingQuantity.text(price)
+            if await saveSpecializedDetails(details, for: task, type: .shopping) {
+                rememberShoppingEstimate(title: task.title, fields: details.fields)
+                saved += 1
+            }
+        }
+        return saved
     }
     func rememberShoppingEstimate(title: String, fields: [String: String]) {
         guard let price = Double(fields["Price"] ?? ""), price.isFinite, price >= 0 else { return }
@@ -862,7 +916,8 @@ final class TaskRepository {
         "TaskFlow.taskSortDirection", "TaskFlow.listIcons", "TaskFlow.listOrder", "TaskFlow.includeCompletedTasks",
         "TaskFlow.dueFilter", "TaskFlow.quickDueFilter", "TaskFlow.quickStatusFilter",
         "TaskFlow.quickPriorityFilter", "TaskFlow.selectedTagFilter", "TaskFlow.quickTagFilter",
-        "TaskFlow.calendar.workspace", "TaskFlow.calendar.savedContexts", "TaskFlow.excludedAvailabilityCalendarIDs"
+        "TaskFlow.calendar.workspace", "TaskFlow.calendar.savedContexts", "TaskFlow.excludedAvailabilityCalendarIDs",
+        "TaskFlow.shoppingPriceHistory"
     ]
 
     private func scheduleCloudSync() {
@@ -956,6 +1011,11 @@ final class TaskRepository {
             selectedTagFilter = preferences.data(forKey: "TaskFlow.selectedTagFilter").flatMap { try? JSONDecoder().decode(TagFilter.self, from: $0) }
             quickTagFilter = preferences.data(forKey: "TaskFlow.quickTagFilter").flatMap { try? JSONDecoder().decode(TagFilter.self, from: $0) }
             foldLegacyFilters()
+            // Remembered shopping prices sync too, so every device estimates the same way.
+            if let data = preferences.data(forKey: "TaskFlow.shoppingPriceHistory"),
+               let synced = try? JSONDecoder().decode([String: Double].self, from: data), synced != shoppingPriceHistory {
+                shoppingPriceHistory = synced
+            }
             }
             isApplyingCloudSnapshot = false
             try await cloudSync.confirmWebNotesSaved()

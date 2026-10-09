@@ -3889,6 +3889,7 @@ struct QuickCaptureView: View {
     @State private var selectedListID = ""
     @State private var selectedCalendarID = ""
     @State private var eventEndDate = Date().addingTimeInterval(3600)
+    @State private var parsed = QuickAddParse()
 
     init(repository: TaskRepository, onTask: @escaping (TaskDraft) -> Void, onEvent: @escaping (EventDraft) -> Void, initialText: String = "", initialKind: String = "Task") {
         self.repository = repository
@@ -3911,7 +3912,8 @@ struct QuickCaptureView: View {
                         .lineLimit(2...5)
                         .textInputAutocapitalization(.sentences)
                         .onChange(of: input) { _, value in parse(value) }
-                    Text("You can dictate with the microphone on your keyboard.")
+                    QuickAddHighlights(text: input, parse: parsed)
+                    Text("Try “Pay rent tomorrow 9am #bills !high @Home”. You can also dictate with the keyboard microphone.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Preview") {
@@ -3968,54 +3970,13 @@ struct QuickCaptureView: View {
     }
 
     private func parse(_ text: String) {
-        var title = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let alertRegex = try? NSRegularExpression(pattern: #"(?i)\\bremind me (\\d+)\\s*(minute|minutes|min|hour|hours|hr)\\s*before\\b"#)
-        if let match = alertRegex?.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
-           let range = Range(match.range, in: title), let amountRange = Range(match.range(at: 1), in: title),
-           let amount = Int(title[amountRange]) {
-            let unit = String(title[range]).lowercased()
-            reminderMinutes = amount * (unit.contains("hour") || unit.contains("hr") ? 60 : 1)
-            title.removeSubrange(range)
-        } else { reminderMinutes = nil }
-
-        dueDate = nil
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue),
-           let match = detector.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
-           let date = match.date, let range = Range(match.range, in: title) {
-            dueDate = date
-            title.removeSubrange(range)
-        } else {
-            let weekday = try? NSRegularExpression(pattern: #"(?i)\\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\\s+at\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?)?\\b"#)
-            if let match = weekday?.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)), let range = Range(match.range, in: title) {
-                let phrase = String(title[range]).lowercased()
-                var date = Calendar.current.startOfDay(for: Date())
-                if phrase.hasPrefix("tomorrow") { date = Calendar.current.date(byAdding: .day, value: 1, to: date) ?? date }
-                else if phrase != "today" {
-                    let names = Calendar.current.weekdaySymbols
-                    if let index = names.firstIndex(where: { $0.lowercased().hasPrefix(String(phrase.prefix(3))) }) {
-                        let today = Calendar.current.component(.weekday, from: date)
-                        var days = (index + 1 - today + 7) % 7
-                        if days == 0 { days = 7 }
-                        date = Calendar.current.date(byAdding: .day, value: days, to: date) ?? date
-                    }
-                }
-                if match.range(at: 2).location != NSNotFound, let hourRange = Range(match.range(at: 2), in: title), let hour = Int(title[hourRange]) {
-                    let minute = Range(match.range(at: 3), in: title).flatMap { Int(title[$0]) } ?? 0
-                    let meridiem = Range(match.range(at: 4), in: title).map { String(title[$0]).lowercased() } ?? ""
-                    var hour24 = hour
-                    if meridiem == "pm" && hour24 < 12 { hour24 += 12 }
-                    if meridiem == "am" && hour24 == 12 { hour24 = 0 }
-                    date = Calendar.current.date(bySettingHour: hour24, minute: minute, second: 0, of: date) ?? date
-                }
-                dueDate = date
-                title.removeSubrange(range)
-            }
-        }
-        title = title.replacingOccurrences(of: #"(?i)\\b(call|meet|appointment|event)\\b"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"(?i)\\bat\\s+\\d{1,2}(?::\\d{2})?\\s*(am|pm)?\\b"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: " ,.-"))
-        parsedTitle = title.isEmpty ? text.trimmingCharacters(in: .whitespacesAndNewlines) : title
+        // Shared natural-language parser: dates and times, #tags, !priority, @list, "remind me … before".
+        let result = QuickAddParser.parse(text, lists: repository.lists.map { (id: $0.id, title: $0.title) })
+        parsed = result
+        dueDate = result.dueDate
+        reminderMinutes = result.alarmMinutes
+        if let listID = result.listID { selectedListID = listID }
+        parsedTitle = result.title.isEmpty ? text.trimmingCharacters(in: .whitespacesAndNewlines) : result.title
         if let dueDate { eventEndDate = dueDate.addingTimeInterval(3600) }
     }
 
@@ -4027,6 +3988,9 @@ struct QuickCaptureView: View {
             draft.dueDate = dueDate
             draft.hasDueTime = dueDate.map { Calendar.current.dateComponents([.hour, .minute], from: $0).hour != 0 || Calendar.current.dateComponents([.hour, .minute], from: $0).minute != 0 } ?? false
             draft.alarmOffsetMinutes = reminderMinutes
+            draft.tags = parsed.tags
+            if let priority = parsed.priority { draft.priority = priority }
+            draft.isFlagged = draft.isFlagged || parsed.isFlagged
             onTask(draft)
         } else {
             var draft = repository.makeEventDraft(startDate: dueDate ?? Date(), endDate: eventEndDate)

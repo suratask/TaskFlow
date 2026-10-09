@@ -374,6 +374,35 @@ struct SearchRemindersIntent: AppIntent {
     }
 }
 
+/// "What's due today?" — answers by voice, including anything overdue, and returns the reminders.
+struct GetDueTodayIntent: AppIntent {
+    static var title: LocalizedStringResource = "What’s Due Today"
+    static var description = IntentDescription("Hear and get the reminders due today, including anything overdue.")
+    static var openAppWhenRun = false
+    func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<[TaskFlowReminderEntity]> {
+        let calendar = Calendar.current
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())) ?? Date()
+        let due = try await TaskFlowIntentDataStore.shared.tasks().filter { task in
+            guard !task.isCompleted, let date = task.dueDate else { return false }
+            return date < tomorrow
+        }
+        let overdue = due.filter { ($0.dueDate ?? .distantFuture) < calendar.startOfDay(for: Date()) }.count
+        return .result(value: due, dialog: IntentDialog(stringLiteral: Self.summary(titles: due.map(\.title), overdue: overdue)))
+    }
+
+    /// "You have 3 things due today: Pay rent, Call Sam, and Buy milk. 1 is overdue."
+    static func summary(titles: [String], overdue: Int) -> String {
+        guard !titles.isEmpty else { return "Nothing is due today." }
+        let named = Array(titles.prefix(3))
+        let list = titles.count > named.count
+            ? named.joined(separator: ", ") + ", and \(titles.count - named.count) more"
+            : ListFormatter.localizedString(byJoining: named)
+        let count = titles.count == 1 ? "1 thing" : "\(titles.count) things"
+        let overdueText = overdue == 0 ? "" : (overdue == 1 ? " 1 is overdue." : " \(overdue) are overdue.")
+        return "You have \(count) due today: \(list).\(overdueText)"
+    }
+}
+
 struct OpenReminderIntent: AppIntent {
     static var title: LocalizedStringResource = "Open Reminder in TaskFlow Studio"
     static var description = IntentDescription("Open a reminder's full details in TaskFlow Studio.")
@@ -407,7 +436,8 @@ struct TaskFlowAppShortcuts: AppShortcutsProvider {
         AppShortcut(intent: RescheduleReminderIntent(), phrases: ["Reschedule \(\.$reminder) in \(.applicationName)"], shortTitle: "Reschedule", systemImageName: "calendar.badge.clock")
         AppShortcut(intent: ReopenReminderIntent(), phrases: ["Reopen \(\.$reminder) in \(.applicationName)"], shortTitle: "Reopen Reminder", systemImageName: "arrow.uturn.backward.circle")
         AppShortcut(intent: OpenReminderListIntent(), phrases: ["Open the \(\.$list) list in \(.applicationName)"], shortTitle: "Open List", systemImageName: "list.bullet")
-        AppShortcut(intent: GetReminderListsIntent(), phrases: ["Get lists in \(.applicationName)"], shortTitle: "Get Lists", systemImageName: "list.bullet.rectangle")
+        // iOS allows ten App Shortcuts; Get Lists remains available as a Shortcuts action.
+        AppShortcut(intent: GetDueTodayIntent(), phrases: ["What’s due today in \(.applicationName)", "What's due today in \(.applicationName)", "What do I have today in \(.applicationName)"], shortTitle: "Due Today", systemImageName: "sun.max")
         AppShortcut(intent: MoveReminderIntent(), phrases: ["Move \(\.$reminder) in \(.applicationName)"], shortTitle: "Move Reminder", systemImageName: "folder")
         AppShortcut(intent: SetReminderPriorityIntent(), phrases: ["Set priority for \(\.$reminder) in \(.applicationName)"], shortTitle: "Set Priority", systemImageName: "flag")
     }

@@ -1901,3 +1901,191 @@ enum ShoppingPriceInput {
         return value
     }
 }
+
+/// Natural-language quick add: "Pay rent tomorrow 9am #bills !high @Home remind me 30 min before".
+/// Returns the clean title, the recognized parts, and their ranges in the input for highlighting.
+struct QuickAddParse: Equatable {
+    enum Kind: String, Equatable { case date, tag, priority, list, alert, flag }
+    struct Token: Equatable {
+        var kind: Kind
+        var range: Range<String.Index>
+        var display: String
+    }
+    var title = ""
+    var dueDate: Date?
+    var hasDueTime = false
+    var priority: TaskPriority?
+    var tags: [String] = []
+    var listID: String?
+    var alarmMinutes: Int?
+    var isFlagged = false
+    var tokens: [Token] = []
+}
+
+enum QuickAddParser {
+    static func parse(_ text: String, lists: [(id: String, title: String)] = [], now: Date = Date(), calendar: Calendar = .current) -> QuickAddParse {
+        var result = QuickAddParse()
+        var claimed: [Range<String.Index>] = []
+        func free(_ range: Range<String.Index>) -> Bool { !claimed.contains { $0.overlaps(range) } }
+        func claim(_ range: Range<String.Index>, _ kind: QuickAddParse.Kind, _ display: String) {
+            claimed.append(range)
+            result.tokens.append(.init(kind: kind, range: range, display: display))
+        }
+        func matches(_ pattern: String) -> [NSTextCheckingResult] {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+            return regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        }
+
+        // "remind me 30 min before" / "remind me 1 hour before"
+        for match in matches(#"\bremind me (\d{1,4})\s*(minutes?|mins?|m|hours?|hrs?|h)\s+before\b"#) {
+            guard let range = Range(match.range, in: text), free(range),
+                  let amountRange = Range(match.range(at: 1), in: text), let amount = Int(text[amountRange]),
+                  let unitRange = Range(match.range(at: 2), in: text) else { continue }
+            let minutes = text[unitRange].lowercased().hasPrefix("h") ? amount * 60 : amount
+            result.alarmMinutes = minutes
+            claim(range, .alert, minutes >= 60 && minutes % 60 == 0 ? "\(minutes / 60) hr before" : "\(minutes) min before")
+        }
+        // #tag
+        for match in matches(#"(?<![\w#])#([\p{L}\p{N}_-]+)"#) {
+            guard let range = Range(match.range, in: text), free(range), let nameRange = Range(match.range(at: 1), in: text) else { continue }
+            let tag = String(text[nameRange])
+            if !result.tags.contains(where: { $0.localizedCaseInsensitiveCompare(tag) == .orderedSame }) { result.tags.append(tag) }
+            claim(range, .tag, "#" + tag)
+        }
+        // !high / !med / !low / !!! / !! / ! and !flag
+        for match in matches(#"(?<!\S)(!{1,3})(high|hi|h|medium|med|m|low|lo|l|flag(?:ged)?)?(?!\S)"#) {
+            guard let range = Range(match.range, in: text), free(range) else { continue }
+            let word = Range(match.range(at: 2), in: text).map { text[$0].lowercased() } ?? ""
+            if word.hasPrefix("flag") {
+                result.isFlagged = true
+                claim(range, .flag, "Flagged")
+                continue
+            }
+            let bangs = Range(match.range(at: 1), in: text).map { text[$0].count } ?? 1
+            let priority: TaskPriority = word.hasPrefix("h") ? .high : word.hasPrefix("m") ? .medium : word.hasPrefix("l") ? .low
+                : bangs >= 3 ? .high : bangs == 2 ? .medium : .low
+            result.priority = priority
+            claim(range, .priority, priority.rawValue + " Priority")
+        }
+        // @List (matches a list whose name, without spaces, starts with the word)
+        if !lists.isEmpty {
+            for match in matches(#"(?<![\w@])@([\p{L}\p{N}_-]+)"#) {
+                guard let range = Range(match.range, in: text), free(range), let nameRange = Range(match.range(at: 1), in: text) else { continue }
+                let key = text[nameRange].lowercased()
+                let compact = { (title: String) in title.lowercased().replacingOccurrences(of: " ", with: "") }
+                guard let list = lists.first(where: { compact($0.title) == key }) ?? lists.first(where: { compact($0.title).hasPrefix(key) }) else { continue }
+                result.listID = list.id
+                claim(range, .list, list.title)
+            }
+        }
+        // Dates and times ("tomorrow 9am", "next Friday", "Oct 20 at 3pm", "in 2 days").
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
+            for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                guard let date = match.date, let range = Range(match.range, in: text), free(range) else { continue }
+                let phrase = text[range].lowercased()
+                let timePattern = #"\d{1,2}(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)|\d{1,2}:\d{2}|\bnoon\b|\bmidnight\b|\bmorning\b|\bafternoon\b|\bevening\b|\btonight\b"#
+                let hasTime = phrase.range(of: timePattern, options: [.regularExpression, .caseInsensitive]) != nil
+                result.dueDate = hasTime ? date : calendar.startOfDay(for: date)
+                result.hasDueTime = hasTime
+                claim(range, .date, hasTime ? date.formatted(date: .abbreviated, time: .shortened) : date.formatted(date: .abbreviated, time: .omitted))
+                break
+            }
+        }
+
+        // Rebuild the title from the untouched input, skipping recognized parts.
+        var title = ""
+        var cursor = text.startIndex
+        for range in claimed.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if range.lowerBound > cursor { title += text[cursor..<range.lowerBound] }
+            cursor = max(cursor, range.upperBound)
+        }
+        title += text[cursor...]
+        result.title = title.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ,.;-"))
+        result.tokens.sort { $0.range.lowerBound < $1.range.lowerBound }
+        return result
+    }
+}
+
+/// Loose title matching for shopping: case, accents, punctuation, and simple plurals don't matter.
+enum ShoppingTitleNormalizer {
+    static func normalize(_ title: String) -> String {
+        tokens(title).joined(separator: " ")
+    }
+
+    static func tokens(_ title: String) -> [String] {
+        title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .map(singular)
+    }
+
+    private static func singular(_ word: String) -> String {
+        guard word.count > 3, !word.allSatisfy(\.isNumber) else { return word }
+        for suffix in ["sses", "shes", "ches", "xes", "oes"] where word.hasSuffix(suffix) { return String(word.dropLast(2)) }
+        if word.hasSuffix("ies") { return String(word.dropLast(3)) + "y" }
+        if word.hasSuffix("s"), !word.hasSuffix("ss") { return String(word.dropLast()) }
+        return word
+    }
+}
+
+/// One priced line from a store receipt.
+struct ReceiptLine: Equatable, Hashable {
+    var name: String
+    var price: Double
+}
+
+enum ReceiptParser {
+    private static let skipWords = ["total", "subtotal", "sub total", "tax", "change", "cash", "visa", "mastercard", "amex", "discover",
+                                    "debit", "credit", "balance", "tender", "saving", "you saved", "discount", "coupon", "card",
+                                    "payment", "amount due", "tip", "rounding", "loyalty", "reward"]
+
+    /// Priced item lines from recognized receipt text (one string per printed row).
+    static func lines(from rows: [String]) -> [ReceiptLine] {
+        guard let regex = try? NSRegularExpression(pattern: #"^(.*?)[\s$€£]+(\d{1,4}[.,]\d{2})\s*[A-Za-z*]{0,2}\s*$"#) else { return [] }
+        return rows.compactMap { raw in
+            let row = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let match = regex.firstMatch(in: row, range: NSRange(row.startIndex..., in: row)),
+                  let nameRange = Range(match.range(at: 1), in: row), let priceRange = Range(match.range(at: 2), in: row),
+                  let price = Double(row[priceRange].replacingOccurrences(of: ",", with: ".")), price > 0, price.isFinite else { return nil }
+            let name = String(row[nameRange]).trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
+            let lower = name.lowercased()
+            guard name.filter(\.isLetter).count >= 2, !skipWords.contains(where: { lower.contains($0) }) else { return nil }
+            return ReceiptLine(name: name, price: price)
+        }
+    }
+
+    /// A word's first letter plus its consonants, the way receipts abbreviate ("whole" → "whl").
+    static func skeleton(_ word: String) -> String {
+        guard let first = word.first else { return word }
+        return String(first) + word.dropFirst().filter { !"aeiou".contains($0) }
+    }
+
+    /// Best receipt line for each item, each line used once. Receipts abbreviate ("GV WHL MLK"),
+    /// so a receipt word of 3+ letters matches an item word it begins.
+    static func match(items: [(id: String, title: String)], lines: [ReceiptLine]) -> [String: ReceiptLine] {
+        var candidates: [(id: String, line: Int, score: Double)] = []
+        for item in items {
+            let itemTokens = ShoppingTitleNormalizer.tokens(item.title).filter { $0.count >= 2 }
+            guard !itemTokens.isEmpty else { continue }
+            for (index, line) in lines.enumerated() {
+                let lineTokens = ShoppingTitleNormalizer.tokens(line.name)
+                let hits = itemTokens.filter { word in
+                    lineTokens.contains { token in
+                        token == word || (token.count >= 3 && word.hasPrefix(token)) || (word.count >= 3 && token.hasPrefix(word))
+                            || (token.count >= 3 && skeleton(word).hasPrefix(token)) // "WHL MLK" → whole milk
+                    }
+                }.count
+                let score = Double(hits) / Double(itemTokens.count)
+                if score >= 0.5 { candidates.append((item.id, index, score)) }
+            }
+        }
+        var result: [String: ReceiptLine] = [:]
+        var usedLines = Set<Int>()
+        for candidate in candidates.sorted(by: { $0.score > $1.score }) where result[candidate.id] == nil && !usedLines.contains(candidate.line) {
+            result[candidate.id] = lines[candidate.line]
+            usedLines.insert(candidate.line)
+        }
+        return result
+    }
+}

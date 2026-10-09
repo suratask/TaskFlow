@@ -1,5 +1,8 @@
+import PhotosUI
 import SwiftUI
 import UIKit
+import Vision
+import VisionKit
 
 extension SpecializedListType {
     var shortDescription: String {
@@ -1406,6 +1409,224 @@ struct EpisodeProgressActions: View {
                 if await repository.saveSpecializedDetails(details, for: task, type: .reading) { undoID = repository.taskUndo?.id }
             }
             busy = false
+        }
+    }
+}
+
+
+// MARK: - Receipt scanning
+
+/// Reads a store receipt (camera or photo), matches its lines to this list's items, and saves
+/// the per-unit prices after the user reviews them. Text recognition runs on the device.
+struct ReceiptScanSheet: View {
+    @Bindable var repository: TaskRepository
+    let listID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var phase = Phase.choose
+    @State private var showingCamera = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var lines: [ReceiptLine] = []
+    @State private var matches: [String: ReceiptLine] = [:]
+    @State private var selected: Set<String> = []
+    @State private var saving = false
+    @State private var message: String?
+
+    private enum Phase { case choose, reading, review }
+
+    private var items: [TaskItem] {
+        repository.tasks.filter { $0.listID == listID && $0.parentID == nil }
+    }
+
+    /// Receipt lines are usually the line total; divide by a numeric quantity for the per-unit price.
+    private func unitPrice(_ task: TaskItem, _ line: ReceiptLine) -> Double {
+        let quantity = ShoppingQuantity.value(repository.specializedDetails(task).fields["Quantity"]) ?? 1
+        return quantity > 0 ? line.price / quantity : line.price
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                switch phase {
+                case .choose:
+                    Section {
+                        Button("Scan Receipt", systemImage: "doc.viewfinder") { showingCamera = true }
+                            .disabled(!VNDocumentCameraViewController.isSupported)
+                        PhotosPicker(selection: $photoItem, matching: .images) {
+                            Label("Choose Receipt Photo", systemImage: "photo")
+                        }
+                    } footer: {
+                        Text("TaskFlow reads the receipt on this device, matches lines to items in this list, and lets you review prices before saving. Prices are remembered for next time.")
+                    }
+                    if let message { Section { Text(message).foregroundStyle(.secondary) } }
+                case .reading:
+                    Section { ProgressView("Reading receipt…").frame(maxWidth: .infinity) }
+                case .review:
+                    if matches.isEmpty {
+                        ContentUnavailableView("No Matching Items", systemImage: "doc.text.magnifyingglass",
+                                               description: Text("None of this receipt’s lines matched items in this list. Try a clearer photo."))
+                        Button("Try Another Receipt") { reset() }
+                    } else {
+                        Section {
+                            ForEach(items.filter { matches[$0.id] != nil }) { task in
+                                if let line = matches[task.id] {
+                                    Toggle(isOn: Binding(get: { selected.contains(task.id) }, set: { on in
+                                        if on { selected.insert(task.id) } else { selected.remove(task.id) }
+                                    })) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(task.title)
+                                            Text(line.name).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .badge(Text(unitPrice(task, line), format: .currency(code: Locale.current.currency?.identifier ?? "USD")))
+                                }
+                            }
+                        } header: { Text("Matched Items") } footer: { Text("Prices are per unit; a line for several items is divided by the item’s quantity.") }
+                        let used = Set(matches.values)
+                        let leftovers = lines.filter { !used.contains($0) }
+                        if !leftovers.isEmpty {
+                            Section("Other Receipt Lines") {
+                                ForEach(Array(leftovers.enumerated()), id: \.offset) { _, line in
+                                    LabeledContent(line.name, value: line.price, format: .number.precision(.fractionLength(2)))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .taskFlowThemedBackground()
+            .navigationTitle("Scan Receipt")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(saving)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                if phase == .review, !matches.isEmpty {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(saving ? "Saving…" : "Save Prices") { save() }.disabled(saving || selected.isEmpty)
+                    }
+                }
+            }
+            .fullScreenCover(isPresented: $showingCamera) {
+                DocumentCameraView { images in
+                    showingCamera = false
+                    read(images.compactMap(\.cgImage).map { ($0, CGImagePropertyOrientation.up) })
+                } onCancel: { showingCamera = false }
+                .ignoresSafeArea()
+            }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                Task {
+                    guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data), let cgImage = image.cgImage else {
+                        message = "That photo couldn’t be opened. Try another."
+                        return
+                    }
+                    read([(cgImage, CGImagePropertyOrientation(image.imageOrientation))])
+                }
+            }
+        }
+    }
+
+    private func reset() {
+        phase = .choose
+        lines = []; matches = [:]; selected = []; photoItem = nil
+    }
+
+    private func read(_ images: [(CGImage, CGImagePropertyOrientation)]) {
+        guard !images.isEmpty else { return }
+        phase = .reading
+        Task {
+            let rows = await Self.recognizeRows(images)
+            let parsed = ReceiptParser.lines(from: rows)
+            lines = parsed
+            matches = ReceiptParser.match(items: items.map { (id: $0.id, title: $0.title) }, lines: parsed)
+            selected = Set(matches.keys)
+            phase = .review
+        }
+    }
+
+    private func save() {
+        saving = true
+        var prices: [String: Double] = [:]
+        for task in items where selected.contains(task.id) {
+            if let line = matches[task.id] { prices[task.id] = unitPrice(task, line) }
+        }
+        Task {
+            _ = await repository.applyReceiptPrices(prices)
+            saving = false
+            dismiss()
+        }
+    }
+
+    /// Recognized text grouped into printed rows (item names and prices are separate text blocks
+    /// at the same height), top to bottom, left to right.
+    nonisolated static func recognizeRows(_ images: [(CGImage, CGImagePropertyOrientation)]) async -> [String] {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var rows: [String] = []
+                for (image, orientation) in images {
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.usesLanguageCorrection = false
+                    try? VNImageRequestHandler(cgImage: image, orientation: orientation).perform([request])
+                    let observations = (request.results ?? []).sorted { $0.boundingBox.midY > $1.boundingBox.midY }
+                    var current: [VNRecognizedTextObservation] = []
+                    var rowY: CGFloat = -1
+                    func flush() {
+                        let text = current.sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+                            .compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                        if !text.isEmpty { rows.append(text) }
+                        current = []
+                    }
+                    for observation in observations {
+                        let tolerance = max(0.006, observation.boundingBox.height * 0.5)
+                        if rowY >= 0, abs(observation.boundingBox.midY - rowY) > tolerance { flush() }
+                        if current.isEmpty { rowY = observation.boundingBox.midY }
+                        current.append(observation)
+                    }
+                    flush()
+                }
+                continuation.resume(returning: rows)
+            }
+        }
+    }
+}
+
+/// Apple's document scanner, which crops and straightens receipts automatically.
+struct DocumentCameraView: UIViewControllerRepresentable {
+    let onScan: ([UIImage]) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan, onCancel: onCancel) }
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let controller = VNDocumentCameraViewController()
+        controller.delegate = context.coordinator
+        return controller
+    }
+    func updateUIViewController(_ controller: VNDocumentCameraViewController, context: Context) {}
+
+    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+        let onScan: ([UIImage]) -> Void
+        let onCancel: () -> Void
+        init(onScan: @escaping ([UIImage]) -> Void, onCancel: @escaping () -> Void) { self.onScan = onScan; self.onCancel = onCancel }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            onScan((0..<scan.pageCount).map { scan.imageOfPage(at: $0) })
+        }
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { onCancel() }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { onCancel() }
+    }
+}
+
+extension CGImagePropertyOrientation {
+    init(_ orientation: UIImage.Orientation) {
+        switch orientation {
+        case .up: self = .up
+        case .down: self = .down
+        case .left: self = .left
+        case .right: self = .right
+        case .upMirrored: self = .upMirrored
+        case .downMirrored: self = .downMirrored
+        case .leftMirrored: self = .leftMirrored
+        case .rightMirrored: self = .rightMirrored
+        @unknown default: self = .up
         }
     }
 }
