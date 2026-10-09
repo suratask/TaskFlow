@@ -1026,6 +1026,17 @@ struct TodaySectionsEditor: View {
                         }
                     }.onMove { repository.moveTodaySections(fromOffsets: $0, toOffset: $1) }
                 } footer: { Text("Choose sections to show and drag to reorder. Quick Capture, Undo, and permission messages remain available.") }
+                if !repository.lists.isEmpty {
+                    Section {
+                        ForEach(repository.lists) { list in
+                            Toggle(isOn: Binding(get: { repository.isFocusNextList(list.id) }, set: { repository.setFocusNextList(list.id, included: $0) })) {
+                                Label(list.title, systemImage: repository.listIcon(for: list.id)).foregroundStyle(list.color)
+                            }
+                        }
+                    } header: { Text("Focus Next Lists") } footer: {
+                        Text("Focus Next suggests tasks only from these lists. Shopping and Reading & Watch Later lists start turned off.")
+                    }
+                }
                 Section { Button("Restore Default Layout", systemImage: "arrow.counterclockwise") { repository.resetTodaySections() } }
             }
             .environment(\.editMode, .constant(.active))

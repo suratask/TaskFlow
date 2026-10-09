@@ -659,7 +659,7 @@ struct TodayDashboardView: View {
     private var availableGaps: [DayTimeGap] { TodayPlanning.gaps(timelineEntries, now: now) }
     private var focusTask: TaskItem? {
         let candidates = repository.tasks.filter { task in
-            repository.isActionableToday(task) && (repository.isTodayPriority(task) || task.dueDate == nil || task.dueDate! < Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now))!)
+            repository.isActionableToday(task) && repository.isFocusNextList(task.listID) && (repository.isTodayPriority(task) || task.dueDate == nil || task.dueDate! < Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now))!)
         }
         let remaining = candidates.filter { !skippedFocusIDs.contains($0.id) }
         return (remaining.isEmpty ? candidates : remaining).sorted {

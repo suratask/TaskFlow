@@ -742,6 +742,25 @@ final class TaskRepository {
         }
     }
     var eventTags: [String: [String]] = [:]
+    /// Lists the user turned off for Focus Next; nil until they first choose, when
+    /// Shopping and Reading & Watch Later lists are left out by default.
+    /// Kept on this device: reminder list identifiers differ between devices.
+    var focusNextExcludedListIDs: Set<String>? = nil {
+        didSet { preferences.set(focusNextExcludedListIDs.map { $0.sorted() }, forKey: "TaskFlow.focusNextExcludedListIDs") }
+    }
+
+    func isFocusNextList(_ listID: String) -> Bool {
+        if let focusNextExcludedListIDs { return !focusNextExcludedListIDs.contains(listID) }
+        return ![.shopping, .reading].contains(listProfile(listID).type)
+    }
+
+    func setFocusNextList(_ listID: String, included: Bool) {
+        // The first choice turns the defaults into an explicit list.
+        var excluded = focusNextExcludedListIDs ?? Set(lists.map(\.id).filter { !isFocusNextList($0) })
+        if included { excluded.remove(listID) } else { excluded.insert(listID) }
+        focusNextExcludedListIDs = excluded
+    }
+
     var excludedAvailabilityCalendarIDs: Set<String> = [] {
         didSet {
             preferences.set(excludedAvailabilityCalendarIDs.sorted(), forKey: "TaskFlow.excludedAvailabilityCalendarIDs")
@@ -1076,6 +1095,7 @@ final class TaskRepository {
         quickTagFilter = preferences.data(forKey: "TaskFlow.quickTagFilter").flatMap { try? JSONDecoder().decode(TagFilter.self, from: $0) }
         listIcons = preferences.dictionary(forKey: "TaskFlow.listIcons") as? [String: String] ?? [:]
         excludedAvailabilityCalendarIDs = Set(preferences.stringArray(forKey: "TaskFlow.excludedAvailabilityCalendarIDs") ?? [])
+        focusNextExcludedListIDs = preferences.stringArray(forKey: "TaskFlow.focusNextExcludedListIDs").map(Set.init)
         hasCompletedOnboarding = preferences.bool(forKey: "TaskFlow.hasCompletedOnboarding")
         appearanceMode = AppearanceMode(rawValue: preferences.string(forKey: "TaskFlow.appearanceMode") ?? "") ?? .system
         appTheme = (AppTheme(rawValue: preferences.string(forKey: "TaskFlow.appTheme") ?? "") ?? .system).canonical
