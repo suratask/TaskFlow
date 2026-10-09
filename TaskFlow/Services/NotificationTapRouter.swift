@@ -78,26 +78,38 @@ final class TaskFlowAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
         [.banner, .list, .sound]
     }
 
-    // Routing posts a notification that SwiftUI observers handle by mutating UI state, so it must run on the main actor.
-    @MainActor
-    func userNotificationCenter(
+    /// iOS calls this off the main actor with objects that aren't Sendable, so copy out plain values
+    /// here and do the routing (which mutates UI state) on the main actor.
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        guard let taskID = response.notification.request.content.userInfo[TaskFlowNotificationPayload.taskIDKey] as? String else {
-            return
-        }
-        switch response.actionIdentifier {
+        let request = response.notification.request
+        guard let taskID = request.content.userInfo[TaskFlowNotificationPayload.taskIDKey] as? String else { return }
+        let action = response.actionIdentifier
+        let showID = request.content.userInfo[EpisodeNotificationActions.showKey] as? Int
+        let episodeID = request.content.userInfo[EpisodeNotificationActions.episodeKey] as? Int
+        let content = ImmutableNotificationContent(value: request.content)
+        await Self.route(taskID: taskID, action: action, showID: showID, episodeID: episodeID, content: content)
+    }
+
+    @MainActor
+    private static func route(taskID: String, action: String, showID: Int?, episodeID: Int?, content: ImmutableNotificationContent) async {
+        switch action {
         case EpisodeNotificationActions.watched, EpisodeNotificationActions.snooze:
-            let payload = response.notification.request.content.userInfo
-            guard let showID = payload[EpisodeNotificationActions.showKey] as? Int,
-                  let episodeID = payload[EpisodeNotificationActions.episodeKey] as? Int,
-                  let repository = Self.watchRepository else { return }
+            guard let showID, let episodeID, let repository = watchRepository else { return }
             _ = await repository.handleEpisodeNotification(taskID: taskID, showID: showID, episodeID: episodeID,
-                snooze: response.actionIdentifier == EpisodeNotificationActions.snooze, content: response.notification.request.content)
+                snooze: action == EpisodeNotificationActions.snooze, content: content.value)
         case UNNotificationDefaultActionIdentifier:
             NotificationTapRouter.shared.route(taskID: taskID)
         default: break
         }
     }
+}
+
+
+/// UNNotificationContent is immutable (the mutable variant is a separate class), so it is safe to hand
+/// from the notification delegate to the main actor.
+private struct ImmutableNotificationContent: @unchecked Sendable {
+    let value: UNNotificationContent
 }

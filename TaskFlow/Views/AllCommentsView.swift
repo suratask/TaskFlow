@@ -2285,7 +2285,8 @@ private struct NoteAttachmentBrowser: UIViewControllerRepresentable {
 
 @MainActor
 private enum NoteAttachmentPreviewCache {
-    final class Preview: NSObject {
+    /// Immutable once created, so it can cross from the loading task to the cache safely.
+    final class Preview: NSObject, @unchecked Sendable {
         let title: String?
         let image: UIImage?
         init(title: String?, image: UIImage?) { self.title = title; self.image = image }
