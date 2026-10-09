@@ -10,8 +10,6 @@ struct SettingsView: View {
     @Bindable var repository: TaskRepository
     var onShowOnboarding: () -> Void = {}
     @State private var newTag = ""
-    @State private var addingShopper = false
-    @State private var newShopperName = ""
     @State private var tagToRename: String?
     @State private var renameTagText = ""
     @State private var tagToDelete: String?
@@ -19,48 +17,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                NavigationLink("Set Up TaskFlow") { GuidedSetupView(repository: repository) }
-                SettingsPermissionsSection(repository: repository)
-
-                Section("Shopping") {
-                    Picker("Your Shopper Name", selection: Binding(get: { repository.shoppingShopperName }, set: { repository.selectShoppingShopper($0) })) {
-                        Text("Not Set").tag("")
-                        ForEach(repository.shoppingShopperChoices, id: \.self) { Text($0).tag($0) }
-                    }
-                    Button("Add Shopper Name", systemImage: "person.badge.plus") { newShopperName = ""; addingShopper = true }
-                    Text("Shown when you add or purchase items in shared shopping lists. Changes arrive through the list’s Reminders account.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-
-                .alert("Add Shopper Name", isPresented: $addingShopper) {
-                    TextField("Name", text: $newShopperName).textContentType(.name)
-                    Button("Cancel", role: .cancel) { newShopperName = "" }
-                    Button("Add") { repository.selectShoppingShopper(newShopperName); newShopperName = "" }
-                        .disabled(newShopperName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                Section("Share Extension") {
-                    ForEach([false, true], id: \.self) { watch in
-                        Picker(watch ? "Watch Later List" : "Read Later List", selection: Binding(get: {
-                            ReadingMedia.defaults.string(forKey: ReadingMedia.preferenceKey(watch: watch)) ?? ""
-                        }, set: { ReadingMedia.defaults.set($0, forKey: ReadingMedia.preferenceKey(watch: watch)) })) {
-                            Text("Automatic").tag("")
-                            ForEach(repository.lists.filter { repository.listProfile($0.id).type == .reading }) { list in
-                                Text(list.title).tag(list.id)
-                            }
-                        }
-                    }
-                    Text("Shared videos default to Watch Later; articles and other links default to Read Later. Choose any Reading & Watch Later list. Links are kept safely until TaskFlow opens and imports them.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-
-                Section("iCloud Sync") {
-                    Text(repository.cloudSyncStatus).font(.footnote).foregroundStyle(.secondary)
-                    Button("Sync Now") { Task { await repository.synchronizeCloud() } }
-                    Text("Syncs notes, tags, comments, pinned lists, specialized list details, templates, and appearance and task-view settings. Reminders and events use their calendar accounts.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-
+                // Five groups: General, Lists, Calendar, Notifications & Permissions, Sync & Data.
+                // List-type options (shopper name, aisle order, budgets) live in each list's own options.
                 Section {
                     NavigationLink {
                         Form {
@@ -96,11 +54,67 @@ struct SettingsView: View {
                         } footer: {
                             Text("Text size follows your device’s Dynamic Type setting. Choose compact, comfortable, or detailed task rows.")
                         }
+                        Section("Tags") {
+                            HStack {
+                                TextField("New tag", text: $newTag)
+                                    .textInputAutocapitalization(.never)
+                                Button {
+                                    addTag()
+                                } label: {
+                                    Image(systemName: "plus.circle.fill")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(MetadataStore.normalizedTag(newTag).isEmpty)
+                            }
+
+                            if repository.allTags.isEmpty {
+                                Text("Create a tag here or from any reminder, event, or note.")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(repository.allTags, id: \.self) { tagName in
+                                    let tag = repository.savedTags.first { $0.name.localizedCaseInsensitiveCompare(tagName) == .orderedSame }
+                                    let tagColor = tag?.color ?? MetadataSnapshot.defaultColor(for: tagName)
+                                    HStack(spacing: 12) {
+                                        Circle()
+                                            .fill(tagColor.color)
+                                            .frame(width: 16, height: 16)
+                                        Label(tagName, systemImage: "tag.fill")
+                                            .foregroundStyle(tagColor.color)
+                                        Spacer()
+                                        Text("\(repository.tagUsageCount(tagName))")
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                        Menu {
+                                            Button("Rename", systemImage: "pencil") {
+                                                tagToRename = tagName
+                                                renameTagText = tagName
+                                            }
+                                            Menu("Color") {
+                                                ForEach(TaskTagColor.allCases) { color in
+                                                    Button {
+                                                        repository.setTagColor(color, for: tagName)
+                                                    } label: {
+                                                        Label(color.title, systemImage: tagColor == color ? "checkmark.circle.fill" : "circle.fill")
+                                                    }
+                                                }
+                                            }
+                                            Button("Delete Tag", systemImage: "trash", role: .destructive) {
+                                                tagToDelete = tagName
+                                            }
+                                        } label: {
+                                            Image(systemName: "ellipsis.circle")
+                                                .foregroundStyle(tagColor.color)
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                }
+                            }
+                        }
                         }
                         .taskFlowThemedBackground()
-                        .navigationTitle("Appearance")
+                        .navigationTitle("General")
                     } label: {
-                        Label { Text("Appearance") } icon: { SettingsIcon(systemName: "paintbrush.fill", color: .blue) }
+                        Label { Text("General") } icon: { SettingsIcon(systemName: "gearshape.fill", color: .gray) }
                     }
                     NavigationLink {
                         Form {
@@ -156,9 +170,9 @@ struct SettingsView: View {
                         }
                         }
                         .taskFlowThemedBackground()
-                        .navigationTitle("Tasks & Lists")
+                        .navigationTitle("Lists")
                     } label: {
-                        Label { Text("Tasks & Lists") } icon: { SettingsIcon(systemName: "checklist", color: .orange) }
+                        Label { Text("Lists") } icon: { SettingsIcon(systemName: "checklist", color: .orange) }
                     }
                     NavigationLink {
                         Form {
@@ -227,12 +241,13 @@ struct SettingsView: View {
                         }
                         }
                         .taskFlowThemedBackground()
-                        .navigationTitle("Calendars")
+                        .navigationTitle("Calendar")
                     } label: {
-                        Label { Text("Calendars") } icon: { SettingsIcon(systemName: "calendar", color: .red) }
+                        Label { Text("Calendar") } icon: { SettingsIcon(systemName: "calendar", color: .red) }
                     }
                     NavigationLink {
                         Form {
+                        SettingsPermissionsSection(repository: repository)
                         Section {
                             Toggle(isOn: notificationToggle) {
                                 Label("Background Notifications", systemImage: "bell.badge")
@@ -255,77 +270,42 @@ struct SettingsView: View {
                         }
                         }
                         .taskFlowThemedBackground()
-                        .navigationTitle("Notifications")
+                        .navigationTitle("Notifications & Permissions")
                     } label: {
-                        Label { Text("Notifications") } icon: { SettingsIcon(systemName: "bell.badge.fill", color: .pink) }
+                        Label { Text("Notifications & Permissions") } icon: { SettingsIcon(systemName: "bell.badge.fill", color: .pink) }
                     }
                     NavigationLink {
                         Form {
-                        Section("Tags") {
-                            HStack {
-                                TextField("New tag", text: $newTag)
-                                    .textInputAutocapitalization(.never)
-                                Button {
-                                    addTag()
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                }
-                                .buttonStyle(.borderless)
-                                .disabled(MetadataStore.normalizedTag(newTag).isEmpty)
-                            }
-
-                            if repository.allTags.isEmpty {
-                                Text("Create a tag here or from any reminder, event, or note.")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(repository.allTags, id: \.self) { tagName in
-                                    let tag = repository.savedTags.first { $0.name.localizedCaseInsensitiveCompare(tagName) == .orderedSame }
-                                    let tagColor = tag?.color ?? MetadataSnapshot.defaultColor(for: tagName)
-                                    HStack(spacing: 12) {
-                                        Circle()
-                                            .fill(tagColor.color)
-                                            .frame(width: 16, height: 16)
-                                        Label(tagName, systemImage: "tag.fill")
-                                            .foregroundStyle(tagColor.color)
-                                        Spacer()
-                                        Text("\(repository.tagUsageCount(tagName))")
-                                            .font(.caption.monospacedDigit())
-                                            .foregroundStyle(.secondary)
-                                        Menu {
-                                            Button("Rename", systemImage: "pencil") {
-                                                tagToRename = tagName
-                                                renameTagText = tagName
-                                            }
-                                            Menu("Color") {
-                                                ForEach(TaskTagColor.allCases) { color in
-                                                    Button {
-                                                        repository.setTagColor(color, for: tagName)
-                                                    } label: {
-                                                        Label(color.title, systemImage: tagColor == color ? "checkmark.circle.fill" : "circle.fill")
-                                                    }
-                                                }
-                                            }
-                                            Button("Delete Tag", systemImage: "trash", role: .destructive) {
-                                                tagToDelete = tagName
-                                            }
-                                        } label: {
-                                            Image(systemName: "ellipsis.circle")
-                                                .foregroundStyle(tagColor.color)
-                                        }
-                                        .buttonStyle(.borderless)
-                                    }
-                                }
+                Section("iCloud Sync") {
+                    Text(repository.cloudSyncStatus).font(.footnote).foregroundStyle(.secondary)
+                    Button("Sync Now") { Task { await repository.synchronizeCloud() } }
+                    Text("Syncs notes, tags, comments, pinned lists, specialized list details, templates, and appearance and task-view settings. Reminders and events use their calendar accounts.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Share Extension") {
+                    ForEach([false, true], id: \.self) { watch in
+                        Picker(watch ? "Watch Later List" : "Read Later List", selection: Binding(get: {
+                            ReadingMedia.defaults.string(forKey: ReadingMedia.preferenceKey(watch: watch)) ?? ""
+                        }, set: { ReadingMedia.defaults.set($0, forKey: ReadingMedia.preferenceKey(watch: watch)) })) {
+                            Text("Automatic").tag("")
+                            ForEach(repository.lists.filter { repository.listProfile($0.id).type == .reading }) { list in
+                                Text(list.title).tag(list.id)
                             }
                         }
+                    }
+                    Text("Shared videos default to Watch Later; articles and other links default to Read Later. Choose any Reading & Watch Later list. Links are kept safely until TaskFlow opens and imports them.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                         }
                         .taskFlowThemedBackground()
-                        .navigationTitle("Tags")
+                        .navigationTitle("Sync & Data")
                     } label: {
-                        Label { Text("Tags") } icon: { SettingsIcon(systemName: "number", color: .purple) }
+                        Label { Text("Sync & Data") } icon: { SettingsIcon(systemName: "icloud.fill", color: .blue) }
                     }
                 }
 
                 Section {
+                    NavigationLink("Set Up TaskFlow") { GuidedSetupView(repository: repository) }
                     Button("Show Welcome Screen") { onShowOnboarding() }
                     LabeledContent("Version", value: appVersionDisplay)
                 } footer: {

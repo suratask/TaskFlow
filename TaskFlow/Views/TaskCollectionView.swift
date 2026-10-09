@@ -138,17 +138,10 @@ struct TaskCollectionView: View {
                                 .disabled(clearingCompleted || repository.isUndoing || repository.completedTasksInSelectedScope.isEmpty)
                             Picker("View As", selection: Binding(
                                 get: { effectiveViewMode == .board ? TaskRepository.TaskViewMode.board : .list },
-                                set: { mode in
-                                    repository.taskViewMode = mode
-                                    if case .list(let id) = repository.selectedScope {
-                                        var profile = repository.listProfile(id)
-                                        profile.settings["View Mode"] = mode.rawValue
-                                        repository.setListProfile(profile, for: id)
-                                    }
-                                }
+                                set: { repository.setViewMode($0, for: repository.selectedScope) } // Remembered per list or view.
                             )) {
                                 Label("List", systemImage: "list.bullet").tag(TaskRepository.TaskViewMode.list)
-                                Label("Columns", systemImage: "rectangle.split.3x1").tag(TaskRepository.TaskViewMode.board)
+                                Label("Board", systemImage: "rectangle.split.3x1").tag(TaskRepository.TaskViewMode.board)
                             }
                             .pickerStyle(.menu)
                             if let currentSmartList {
@@ -255,7 +248,7 @@ struct TaskCollectionView: View {
             switch effectiveViewMode {
             case .list, .timeline:
                 taskList
-            case .calendar:
+            case .calendar, .agenda: // Agenda is now a Calendar style.
                 CalendarBoardView(
                     searchQuery: calendarSearch,
                     repository: repository,
@@ -270,18 +263,13 @@ struct TaskCollectionView: View {
                 )
             case .board:
                 TaskBoardView(repository: repository, listColor: listColor(for:))
-            case .agenda:
-                AgendaView(
-                    repository: repository,
-                    editorDraft: $editorDraft,
-                    selectedCalendarEvent: $selectedCalendarEvent,
-                    title: title,
-                    accentColor: accentColor,
-                    upcomingCount: upcomingCount,
-                    attachmentCount: attachmentCount,
-                    listColor: listColor(for:)
-                )
             }
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            // Every active filter is visible, so it's clear why a task isn't showing.
+            if repository.hasActiveFilters && effectiveViewMode != .calendar {
+                TaskFilterChipBar(repository: repository)
             }
         }
     }
@@ -294,13 +282,12 @@ struct TaskCollectionView: View {
         return repository.allTags.filter { partial.isEmpty || $0.localizedCaseInsensitiveContains(partial) }.prefix(8).map { $0 }
     }
 
+    /// Three modes: List, Board, and Calendar (whose Day/Week/Month/Agenda styles replace the old
+    /// Timeline and Agenda modes). List and Board are remembered per list or view.
     private var effectiveViewMode: TaskRepository.TaskViewMode {
-        if viewModeOverride == .calendar { return .calendar }
-        if viewModeOverride == nil, case .list(let id) = repository.selectedScope,
-           let raw = repository.listProfile(id).settings["View Mode"], let mode = TaskRepository.TaskViewMode(rawValue: raw) { return mode }
-        if repository.taskViewMode == .board { return .board }
-        let mode = viewModeOverride ?? repository.taskViewMode
-        return mode == .timeline ? .list : mode
+        if let viewModeOverride { return viewModeOverride.normalized }
+        if repository.taskViewMode.normalized == .calendar { return .calendar }
+        return repository.viewMode(for: repository.selectedScope)
     }
 
     private var showsBulkTagButton: Bool {
@@ -423,7 +410,7 @@ struct TaskCollectionView: View {
                             }
                         }
                     } header: {
-                        if repository.taskGroupOption != .none {
+                        if repository.showsGroupHeaders {
                             Text(group.title)
                         }
                     }
@@ -499,9 +486,8 @@ struct TaskCollectionView: View {
         case .today: "Today"
         case .flagged: "Flagged"
         case .completed: "Completed"
-        case .next7Days: "Next 7 Days"
-        case .upNext: "Up Next"
-        case .planMyDay: "Plan My Day"
+        case .next7Days, .upNext: "Upcoming"
+        case .planMyDay: "Today"
         case .list(let id): repository.lists.first { $0.id == id }?.title ?? "List"
         case .smart(let id): repository.smartLists.first { $0.id == id }?.title ?? "Smart List"
         }
@@ -911,7 +897,8 @@ private struct CalendarBoardView: View {
         /// The four standard calendar views; the older "Hours" mode now opens as Day.
         static let pickerCases: [CalendarMode] = [.day, .week, .month, .agenda]
 
-        var displayName: String { self == .agenda ? "List" : rawValue }
+        /// "Agenda" (not "List") so it is not confused with the List view mode.
+        var displayName: String { rawValue }
     }
 
     @Bindable var repository: TaskRepository
@@ -2441,154 +2428,6 @@ private struct CalendarTaskMenu: View {
     }
 }
 
-private struct AgendaView: View {
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @Bindable var repository: TaskRepository
-    @Binding var editorDraft: TaskDraft?
-    @Binding var selectedCalendarEvent: CalendarEvent?
-    let title: String
-    let accentColor: Color
-    let upcomingCount: Int
-    let attachmentCount: Int
-    let listColor: (String) -> Color
-
-    private let calendar = Calendar.current
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if agendaDays.allSatisfy({ $0.tasks.isEmpty && $0.events.isEmpty }) {
-                    EmptyTaskStateView(repository: repository, editorDraft: $editorDraft)
-                        .padding(.horizontal, 16)
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(agendaDays) { day in
-                            if !day.tasks.isEmpty || !day.events.isEmpty {
-                                AgendaDaySection(
-                                    day: day,
-                                    repository: repository,
-                                    listColor: listColor,
-                                    editorDraft: $editorDraft,
-                                    selectedCalendarEvent: $selectedCalendarEvent
-                                )
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-                }
-            }
-        }
-    }
-
-    private var agendaDays: [AgendaDay] {
-        (0..<7).compactMap { offset in
-            guard let date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: Date())) else { return nil }
-            return AgendaDay(
-                date: date,
-                tasks: tasks(on: date),
-                events: events(on: date)
-            )
-        }
-    }
-
-    private var todayAgenda: AgendaDay {
-        agendaDays.first ?? AgendaDay(date: Date(), tasks: [], events: [])
-    }
-
-    private var nextEvent: CalendarEvent? {
-        let now = Date()
-        return repository.filteredCalendarEvents
-            .filter { $0.endDate >= now }
-            .sorted { $0.startDate < $1.startDate }
-            .first
-    }
-
-    private func tasks(on date: Date) -> [TaskItem] {
-        repository.rootTasks.filter { task in
-            guard let dueDate = task.dueDate else { return false }
-            return calendar.isDate(dueDate, inSameDayAs: date)
-        }
-    }
-
-    private func events(on date: Date) -> [CalendarEvent] {
-        guard let interval = calendar.dateInterval(of: .day, for: date) else { return [] }
-        return repository.filteredCalendarEvents.filter { $0.startDate < interval.end && $0.endDate > interval.start }
-    }
-
-    private func eventColor(for calendarID: String) -> Color {
-        repository.eventCalendars.first { $0.id == calendarID }?.color ?? .blue
-    }
-
-    private func busiestWindow(for day: AgendaDay) -> String {
-        let items = day.items
-        guard !items.isEmpty else { return "open" }
-
-        let hourCounts = Dictionary(grouping: items) { item in
-            calendar.component(.hour, from: item.startDate)
-        }
-        guard let busiestHour = hourCounts.max(by: { $0.value.count < $1.value.count })?.key else {
-            return "open"
-        }
-        return "\(formattedHour(busiestHour))-\(formattedHour(busiestHour + 1))"
-    }
-
-    private func formattedHour(_ hour: Int) -> String {
-        let normalized = ((hour % 24) + 24) % 24
-        switch normalized {
-        case 0: return "12a"
-        case 1..<12: return "\(normalized)a"
-        case 12: return "12p"
-        default: return "\(normalized - 12)p"
-        }
-    }
-
-    private func relatedTasks(before event: CalendarEvent) -> [TaskItem] {
-        repository.rootTasks
-            .filter { task in
-                guard !task.isCompleted, let dueDate = task.dueDate else { return false }
-                return dueDate <= event.startDate && calendar.isDate(dueDate, inSameDayAs: event.startDate)
-            }
-            .sorted { lhs, rhs in
-                (lhs.dueDate ?? .distantFuture) < (rhs.dueDate ?? .distantFuture)
-            }
-            .prefix(2)
-            .map { $0 }
-    }
-
-    private func relatedNotes(for event: CalendarEvent) -> [QuickNote] {
-        let eventTokens = Set(event.title
-            .lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-            .filter { $0.count > 3 })
-
-        return repository.quickNotes
-            .filter { note in
-                if note.linkedEventID == event.id { return true }
-                let noteText = "\(note.title) \(note.text)".lowercased()
-                return eventTokens.contains { noteText.contains($0) || note.tags.contains($0) }
-            }
-            .prefix(2)
-            .map { $0 }
-    }
-
-    private func suggestedTask(for gap: DayTimeGap) -> TaskItem? {
-        repository.tasks
-            .filter { task in
-                !task.isCompleted &&
-                    task.parentID == nil &&
-                    (task.durationMinutes ?? 30) <= gap.minutes
-            }
-            .sorted { lhs, rhs in
-                let lhsScore = (lhs.priority == .high ? 100 : 0) + (lhs.isFlagged ? 20 : 0) + (lhs.dueDate == nil ? 0 : 10)
-                let rhsScore = (rhs.priority == .high ? 100 : 0) + (rhs.isFlagged ? 20 : 0) + (rhs.dueDate == nil ? 0 : 10)
-                return lhsScore > rhsScore
-            }
-            .first
-    }
-}
-
 private struct AgendaDay: Identifiable {
     var id: Date { date }
     let date: Date
@@ -2844,7 +2683,7 @@ private enum PinnedTaskItem: Identifiable, Hashable {
     var title: String {
         switch self {
         case .allTasks: "All Tasks"
-        case .upNext: "Up Next"
+        case .upNext: "Upcoming"
         case .list(let list): list.title
         }
     }
@@ -2882,7 +2721,7 @@ private struct PinnedTaskCard: View {
     private var subtitle: String {
         switch item {
         case .allTasks: "Everything in your lists"
-        case .upNext: "Due in the next 14 days"
+        case .upNext: "Scheduled tasks by day"
         case .list: "Reminder list"
         }
     }
@@ -3020,16 +2859,41 @@ private struct TaskFilterMenu: View {
         .accessibilityLabel(hasFilters ? "Filters, active" : "Filters")
     }
 
-    private var hasFilters: Bool {
-        repository.quickTagFilter != nil || repository.selectedTagFilter != nil ||
-            repository.quickStatusFilter != nil || repository.quickPriorityFilter != nil ||
-            repository.quickDueFilter != .any || repository.dueFilter != .any
-    }
+    private var hasFilters: Bool { repository.hasActiveFilters }
 
-    private func clearFilters() {
-        repository.clearQuickFilters()
-        repository.selectedTagFilter = nil
-        repository.dueFilter = .any
+    private func clearFilters() { repository.clearQuickFilters() }
+}
+
+/// The active filters as removable chips with a single Clear.
+struct TaskFilterChipBar: View {
+    @Bindable var repository: TaskRepository
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal.decrease").foregroundStyle(.secondary).accessibilityHidden(true)
+                ForEach(repository.activeFilters) { filter in
+                    Button {
+                        withAnimation { repository.clearFilter(filter.kind) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(filter.title)
+                            Image(systemName: "xmark").font(.caption2.weight(.bold))
+                        }
+                        .font(.subheadline)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.tint.opacity(0.15), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove filter " + filter.title)
+                }
+                Button("Clear") { withAnimation { repository.clearQuickFilters() } }
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityLabel("Clear all filters")
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+        }
+        .background(.bar)
     }
 }
 
@@ -3086,11 +2950,7 @@ struct EmptyTaskStateView: View {
     }
 
     private var hasFilters: Bool {
-        !repository.searchQuery.isEmpty || repository.selectedTagFilter != nil || repository.dueFilter != .any ||
-        repository.quickTagFilter != nil ||
-            repository.quickStatusFilter != nil ||
-            repository.quickPriorityFilter != nil ||
-            repository.quickDueFilter != .any
+        !repository.searchQuery.isEmpty || repository.hasActiveFilters
     }
 
     private var emptyTitle: String {
@@ -3210,7 +3070,42 @@ struct TaskRowView: View {
             }
             Button(repository.isTodayPriority(task) ? "Remove Today Priority" : "Add to Today Priorities", systemImage: "star") { repository.toggleTodayPriority(task) }
                 .disabled(!repository.isTodayPriority(task) && repository.todayPriorityIDs.count >= 3)
-            Button("Reschedule", systemImage: "calendar") { rescheduling = true }
+            // Quick edits right in the menu; only "Custom Date…" needs a sheet.
+            Menu("Due Date", systemImage: "calendar") {
+                let calendar = Calendar.current
+                let today = calendar.startOfDay(for: Date())
+                Button("Today") { Task { await repository.setDueDate(today, for: task) } }
+                Button("Tomorrow") { Task { await repository.setDueDate(calendar.date(byAdding: .day, value: 1, to: today), for: task) } }
+                Button("Next Week") { Task { await repository.setDueDate(calendar.date(byAdding: .day, value: 7, to: today), for: task) } }
+                if task.dueDate != nil { Button("No Date") { Task { await repository.setDueDate(nil, for: task) } } }
+                Button("Custom Date…") { rescheduling = true }
+            }
+            Picker(selection: Binding(get: { task.priority }, set: { value in Task { await repository.setPriority(value, for: task) } })) {
+                ForEach(TaskPriority.allCases) { Text($0.rawValue).tag($0) }
+            } label: { Label("Priority", systemImage: "exclamationmark") }
+            .pickerStyle(.menu)
+            if !repository.allTags.isEmpty {
+                Menu("Tags", systemImage: "number") {
+                    ForEach(repository.allTags, id: \.self) { tag in
+                        let hasTag = task.tags.contains { $0.localizedCaseInsensitiveCompare(tag) == .orderedSame }
+                        Button {
+                            Task {
+                                if hasTag { await repository.removeTags([tag], from: task) }
+                                else { await repository.addTags([tag], to: task) }
+                            }
+                        } label: {
+                            if hasTag { Label("#" + tag, systemImage: "checkmark") } else { Text("#" + tag) }
+                        }
+                    }
+                }
+            }
+            if repository.lists.count > 1 {
+                Menu("Move to List", systemImage: "folder") {
+                    ForEach(repository.lists.filter { $0.id != task.listID }) { list in
+                        Button(list.title) { Task { await repository.moveTasks(toListID: list.id, taskIDs: [task.id]) } }
+                    }
+                }
+            }
             Button("Dependencies", systemImage: "arrow.triangle.branch") { choosingDependencies = true }
             Divider()
             Button(role: .destructive) {
@@ -3540,7 +3435,7 @@ struct TasksHomeView: View {
                 Section("Browse") {
                     scopeRow("Inbox", icon: "tray", color: .blue, scope: .inbox)
                     scopeRow("Today", icon: "calendar", color: .teal, scope: .today)
-                    scopeRow("Next 7 Days", icon: "calendar.badge.clock", color: .cyan, scope: .next7Days)
+                    scopeRow("Upcoming", icon: "calendar.badge.clock", color: .cyan, scope: .next7Days)
                     scopeRow("Flagged", icon: "flag", color: .orange, scope: .flagged)
                     scopeRow("Completed", icon: "checkmark.circle", color: .green, scope: .completed)
                 }
@@ -4230,7 +4125,7 @@ private struct MultiTaskPlanningSheet: View {
                 if !status.isEmpty { Section { Text(status) } }
             }
             .taskFlowThemedBackground()
-            .navigationTitle("Plan My Day")
+            .navigationTitle("Schedule Time Blocks")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(isSaving) } }
             .onChange(of: startDate) { _, _ in proposals = [] }
         }

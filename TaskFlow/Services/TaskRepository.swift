@@ -39,15 +39,17 @@ final class TaskRepository {
 
         var id: String { rawValue }
 
-        /// Older themes duplicated these colors; they remain decodable but map to the matching accent.
-        static let selectableCases: [AppTheme] = [.system, .classicBlue, .oceanTeal, .meadowGreen, .sunsetCoral, .grape, .slate, .aurora, .ember, .rose, .lagoon, .sunrise]
+        /// The curated themes offered in Settings.
+        static let selectableCases: [AppTheme] = [.system, .classicBlue, .oceanTeal, .meadowGreen, .sunsetCoral, .slate, .aurora]
 
+        /// Retired themes stay decodable (stored preferences, iCloud settings) and quietly
+        /// map to the closest curated theme.
         var canonical: AppTheme {
             switch self {
             case .taskflow: .classicBlue
-            case .ocean: .oceanTeal
-            case .citrus: .sunsetCoral
-            case .berry: .grape
+            case .ocean, .lagoon: .oceanTeal
+            case .citrus, .ember, .rose, .sunrise: .sunsetCoral
+            case .grape, .berry: .aurora
             case .graphite: .slate
             default: self
             }
@@ -69,6 +71,36 @@ final class TaskRepository {
         case board = "Board"
 
         var id: String { rawValue }
+
+        /// Timeline and Agenda are retired top-level modes: Timeline shows as List, and
+        /// Agenda opens Calendar (where Agenda remains a style alongside Day, Week, and Month).
+        var normalized: TaskViewMode {
+            switch self {
+            case .timeline: .list
+            case .agenda: .calendar
+            default: self
+            }
+        }
+    }
+
+    /// List or Board for a scope: a list keeps it in its profile (synced); other views keep it on this device.
+    func viewMode(for scope: TaskScope) -> TaskViewMode {
+        let raw: String?
+        if case .list(let id) = scope { raw = listProfile(id).settings["View Mode"] }
+        else { raw = preferences.string(forKey: "TaskFlow.viewMode." + scope.id) }
+        if let raw, let mode = TaskViewMode(rawValue: raw) { return mode.normalized == .board ? .board : .list }
+        return taskViewMode == .board ? .board : .list // Earlier app-wide choice.
+    }
+
+    func setViewMode(_ mode: TaskViewMode, for scope: TaskScope) {
+        let value = mode.normalized == .board ? TaskViewMode.board : .list
+        if case .list(let id) = scope {
+            var profile = listProfile(id)
+            profile.settings["View Mode"] = value.rawValue
+            setListProfile(profile, for: id)
+        } else {
+            preferences.set(value.rawValue, forKey: "TaskFlow.viewMode." + scope.id)
+        }
     }
 
     enum TaskDensity: String, CaseIterable, Identifiable {
@@ -886,7 +918,7 @@ final class TaskRepository {
             appearanceMode = AppearanceMode(rawValue: preferences.string(forKey: "TaskFlow.appearanceMode") ?? "") ?? .system
             appTheme = (AppTheme(rawValue: preferences.string(forKey: "TaskFlow.appTheme") ?? "") ?? .system).canonical
             taskDensity = TaskDensity(rawValue: preferences.string(forKey: "TaskFlow.taskDensity") ?? "") ?? .comfortable
-            taskViewMode = TaskViewMode(rawValue: preferences.string(forKey: "TaskFlow.taskViewMode") ?? "") ?? .list
+            taskViewMode = (TaskViewMode(rawValue: preferences.string(forKey: "TaskFlow.taskViewMode") ?? "") ?? .list).normalized
             taskGroupOption = TaskGroupOption(rawValue: preferences.string(forKey: "TaskFlow.taskGroupOption") ?? "") ?? .none
             taskSortOption = TaskSortOption(rawValue: preferences.string(forKey: "TaskFlow.taskSortOption") ?? "") ?? .dueDate
             taskSortDirection = TaskSortDirection(rawValue: preferences.string(forKey: "TaskFlow.taskSortDirection") ?? "") ?? .ascending
@@ -901,6 +933,7 @@ final class TaskRepository {
             quickPriorityFilter = TaskPriority(rawValue: preferences.string(forKey: "TaskFlow.quickPriorityFilter") ?? "")
             selectedTagFilter = preferences.data(forKey: "TaskFlow.selectedTagFilter").flatMap { try? JSONDecoder().decode(TagFilter.self, from: $0) }
             quickTagFilter = preferences.data(forKey: "TaskFlow.quickTagFilter").flatMap { try? JSONDecoder().decode(TagFilter.self, from: $0) }
+            foldLegacyFilters()
             }
             isApplyingCloudSnapshot = false
             try await cloudSync.confirmWebNotesSaved()
@@ -1047,7 +1080,7 @@ final class TaskRepository {
         appearanceMode = AppearanceMode(rawValue: preferences.string(forKey: "TaskFlow.appearanceMode") ?? "") ?? .system
         appTheme = (AppTheme(rawValue: preferences.string(forKey: "TaskFlow.appTheme") ?? "") ?? .system).canonical
         taskDensity = TaskDensity(rawValue: preferences.string(forKey: "TaskFlow.taskDensity") ?? "") ?? .comfortable
-        taskViewMode = TaskViewMode(rawValue: preferences.string(forKey: "TaskFlow.taskViewMode") ?? "") ?? .list
+        taskViewMode = (TaskViewMode(rawValue: preferences.string(forKey: "TaskFlow.taskViewMode") ?? "") ?? .list).normalized
         taskGroupOption = TaskGroupOption(rawValue: preferences.string(forKey: "TaskFlow.taskGroupOption") ?? "") ?? .none
         taskSortOption = TaskSortOption(rawValue: preferences.string(forKey: "TaskFlow.taskSortOption") ?? "") ?? .dueDate
         taskSortDirection = TaskSortDirection(rawValue: preferences.string(forKey: "TaskFlow.taskSortDirection") ?? "") ?? .ascending
@@ -1077,6 +1110,7 @@ final class TaskRepository {
     }
 
     func bootstrap() async {
+        foldLegacyFilters()
         cloudSyncEnabled = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
         if cloudPreferencesObserver == nil {
             cloudPreferencesObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: preferences, queue: .main) { [weak self] _ in
@@ -1445,15 +1479,51 @@ final class TaskRepository {
     var groupedTasks: [TaskGroup] { cachedGroups(rootsOnly: false) }
     var groupedRootTasks: [TaskGroup] { cachedGroups(rootsOnly: true) }
 
+    /// Upcoming (and its older names) always shows day sections.
+    var isUpcomingScope: Bool { selectedScope == .next7Days || selectedScope == .upNext }
+    var showsGroupHeaders: Bool { isUpcomingScope || taskGroupOption != .none }
+
     private func cachedGroups(rootsOnly: Bool) -> [TaskGroup] {
         let items = filteredTasks
         let key = taskFilterCacheKey + [taskGroupOption.rawValue, String(rootsOnly)]
         if key == groupCacheKey && Date() < groupCacheExpiry { return groupCacheResult }
-        let result = calculateGroups(rootsOnly ? items.filter { $0.parentID == nil } : items)
+        let scoped = rootsOnly ? items.filter { $0.parentID == nil } : items
+        let result = isUpcomingScope ? Self.upcomingGroups(scoped) : calculateGroups(scoped)
         groupCacheKey = key
         groupCacheExpiry = taskFilterCacheExpiry
         groupCacheResult = result
         return result
+    }
+
+    /// Overdue, Today, Tomorrow, the rest of this week by day, then by month.
+    static func upcomingGroups(_ list: [TaskItem], now: Date = Date(), calendar: Calendar = .current) -> [TaskGroup] {
+        let today = calendar.startOfDay(for: now)
+        let sorted = list.sorted { ($0.dueDate ?? .distantFuture, $0.title) < ($1.dueDate ?? .distantFuture, $1.title) }
+        var order: [String] = []
+        var titles: [String: String] = [:]
+        var members: [String: [TaskItem]] = [:]
+        for task in sorted {
+            guard let due = task.dueDate else { continue }
+            let day = calendar.startOfDay(for: due)
+            let offset = calendar.dateComponents([.day], from: today, to: day).day ?? 0
+            var id = "", title = ""
+            if task.isOverdue(now: now, calendar: calendar) || offset < 0 {
+                (id, title) = ("overdue", "Overdue")
+            } else if offset == 0 {
+                (id, title) = ("today", "Today")
+            } else if offset == 1 {
+                (id, title) = ("tomorrow", "Tomorrow")
+            } else if offset < 7 {
+                (id, title) = ("day-\(offset)", due.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+            } else {
+                let sameYear = calendar.component(.year, from: due) == calendar.component(.year, from: now)
+                let month = calendar.dateComponents([.year, .month], from: due)
+                (id, title) = ("month-\(month.year ?? 0)-\(month.month ?? 0)", sameYear ? due.formatted(.dateTime.month(.wide)) : due.formatted(.dateTime.month(.wide).year()))
+            }
+            if members[id] == nil { order.append(id); titles[id] = title }
+            members[id, default: []].append(task)
+        }
+        return order.map { TaskGroup(id: $0, title: titles[$0] ?? "", tasks: members[$0] ?? []) }
     }
 
     private func calculateGroups(_ list: [TaskItem]) -> [TaskGroup] {
@@ -1546,6 +1616,51 @@ final class TaskRepository {
         quickStatusFilter = nil
         quickPriorityFilter = nil
         quickDueFilter = .any
+    }
+
+    /// There is one set of filters (status, priority, due, tag), shown as chips. The older
+    /// separate due/tag filters fold into it once, so nothing filters invisibly.
+    func foldLegacyFilters() {
+        if quickDueFilter == .any, dueFilter != .any { quickDueFilter = dueFilter }
+        if quickTagFilter == nil, let selectedTagFilter { quickTagFilter = selectedTagFilter }
+        dueFilter = .any
+        selectedTagFilter = nil
+        preferences.set(quickDueFilter.rawValue, forKey: "TaskFlow.quickDueFilter")
+        preferences.set(try? JSONEncoder().encode(quickTagFilter), forKey: "TaskFlow.quickTagFilter")
+        preferences.removeObject(forKey: "TaskFlow.dueFilter")
+        preferences.removeObject(forKey: "TaskFlow.selectedTagFilter")
+    }
+
+    enum TaskFilterKind: String, CaseIterable, Identifiable {
+        case status, priority, due, tag
+        var id: String { rawValue }
+    }
+
+    struct ActiveTaskFilter: Identifiable, Hashable {
+        let kind: TaskFilterKind
+        let title: String
+        var id: TaskFilterKind { kind }
+    }
+
+    /// Active filters in display order, each with a chip title.
+    var activeFilters: [ActiveTaskFilter] {
+        var result: [ActiveTaskFilter] = []
+        if let quickStatusFilter { result.append(.init(kind: .status, title: quickStatusFilter.rawValue)) }
+        if let quickPriorityFilter { result.append(.init(kind: .priority, title: quickPriorityFilter.rawValue + " Priority")) }
+        if quickDueFilter != .any { result.append(.init(kind: .due, title: quickDueFilter.rawValue)) }
+        if let quickTagFilter { result.append(.init(kind: .tag, title: quickTagFilter.title)) }
+        return result
+    }
+
+    var hasActiveFilters: Bool { !activeFilters.isEmpty }
+
+    func clearFilter(_ kind: TaskFilterKind) {
+        switch kind {
+        case .status: quickStatusFilter = nil
+        case .priority: quickPriorityFilter = nil
+        case .due: quickDueFilter = .any
+        case .tag: quickTagFilter = nil
+        }
     }
 
     func color(forTag tag: String) -> Color {
@@ -1700,6 +1815,22 @@ final class TaskRepository {
             offerUndo("Flag updated", previous: [task])
             await refreshTasks()
             await rescheduleNotifications()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func setPriority(_ priority: TaskPriority, for task: TaskItem) async {
+        guard !isUndoing, task.priority != priority else { return }
+        do {
+            var draft = TaskDraft(task: task)
+            draft.priority = priority
+            _ = try reminderService.saveTask(draft, metadataStore: metadataStore)
+            var displayed = task
+            displayed.priority = priority
+            updateTaskInMemory(displayed)
+            offerUndo("Priority updated", previous: [task])
+            await refreshTasks()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -3325,10 +3456,9 @@ final class TaskRepository {
             }
         case .completed:
             return items.filter { $0.isCompleted }
-        case .next7Days:
-            return items.filter { $0.isDue(inNextDays: 7) }
-        case .upNext:
-            return items.filter { $0.isDue(inNextDays: 14) }
+        case .next7Days, .upNext:
+            // Upcoming: every dated task, shown in day sections like Reminders' Scheduled list.
+            return items.filter { $0.dueDate != nil }
         case .planMyDay:
             return items.filter { !$0.isCompleted }
         }

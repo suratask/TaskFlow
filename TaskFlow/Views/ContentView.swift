@@ -785,7 +785,7 @@ private struct SidebarView: View {
             Section {
                 scopeRow(.inbox, title: "Open", icon: "tray.full", color: .blue)
                 scopeRow(.today, title: "Today", icon: "calendar", color: .teal)
-                scopeRow(.next7Days, title: "Next 7 Days", icon: "calendar.badge.clock", color: .cyan)
+                scopeRow(.next7Days, title: "Upcoming", icon: "calendar.badge.clock", color: .cyan)
                 Label { Text("Calendar") } icon: { Image(systemName: "calendar").foregroundStyle(.indigo) }
                     .badge(repository.filteredCalendarEvents.count)
                     .tag(SidebarItem.calendar)
@@ -800,7 +800,7 @@ private struct SidebarView: View {
                         if itemID == PinnedTaskIdentifier.allTasks {
                             scopeRow(.all, title: "All Tasks", icon: "tray.full", color: repository.appTheme.primary)
                         } else if itemID == PinnedTaskIdentifier.upNext {
-                            scopeRow(.upNext, title: "Up Next", icon: "calendar.badge.clock", color: repository.appTheme.secondary)
+                            scopeRow(.upNext, title: "Upcoming", icon: "calendar.badge.clock", color: repository.appTheme.secondary)
                         } else if let list = repository.lists.first(where: { $0.id == itemID }) {
                             listRow(list, isPinned: true)
                         }

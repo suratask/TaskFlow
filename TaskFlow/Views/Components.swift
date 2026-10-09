@@ -316,7 +316,41 @@ struct TodayDashboardView: View {
     @State private var skippedFocusIDs: Set<String> = []
     @State private var completingFocusTask = false
     @State private var now = Date()
+    @AppStorage("TaskFlow.plannedDay") private var plannedDay = ""
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// Plan My Day is Today's morning mode: until noon (or when opened as Plan My Day),
+    /// a card offers the planning steps until it's marked done for the day.
+    private var showsPlanningCard: Bool {
+        repository.accessState == .granted && plannedDay != SpecializedTaskDetails.dateText(now) &&
+            (repository.selectedScope == .planMyDay || Calendar.current.component(.hour, from: now) < 12)
+    }
+
+    private var planningCard: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Plan Your Day", systemImage: "sun.max.fill").font(.headline).foregroundStyle(.orange)
+                Text("Choose your top three, then decide what to do with anything overdue.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                ViewThatFits(in: .horizontal) {
+                    HStack { planningButtons }
+                    VStack(alignment: .leading) { planningButtons }
+                }
+                Button("Done Planning") { withAnimation { plannedDay = SpecializedTaskDetails.dateText(now) } }
+                    .buttonStyle(.borderless).font(.subheadline)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder private var planningButtons: some View {
+        Button("Choose Top 3", systemImage: "star") { choosingPriorities = true }
+            .buttonStyle(.borderedProminent)
+        if !repository.overdueTasks.isEmpty {
+            Button("Review Overdue (\(repository.overdueTasks.count))", systemImage: "clock.arrow.circlepath") { planningOverdue = true }
+                .buttonStyle(.bordered)
+        }
+    }
 
     private var todayEvents: [CalendarEvent] {
         let calendar = Calendar.current
@@ -347,6 +381,7 @@ struct TodayDashboardView: View {
                 }
             }
 
+            if showsPlanningCard { planningCard }
             ForEach(repository.visibleTodaySections) { section in
                 todaySection(section, proxy: proxy)
             }
@@ -1397,8 +1432,7 @@ struct SpecializedTaskListView: View {
             Section {
                 if type == .shopping { shoppingHeader(progress) }
                 else if type == .reading { readingHeader(progress) }
-                else { Label(type.rawValue, systemImage: type.icon).font(.headline); workflowSummary(progress) }
-                if type == .packing { Toggle("Still to Pack", isOn: $remainingOnly) }
+                else { workflowSummary(progress) } // The list's name is already the title; controls live in List Tools.
                 if type == .routines, let current = visible.first {
                     VStack(alignment: .leading) {
                         Text("Current Step").font(.caption).foregroundStyle(.secondary)
@@ -1409,14 +1443,13 @@ struct SpecializedTaskListView: View {
                         }.buttonStyle(.borderless)
                     }
                 }
-                if type == .packing {
-                    Text(repository.listProfile(listID).settings["Trip"] ?? "Packing List")
-                    if let dates = repository.listProfile(listID).settings["Travel Dates"], !dates.isEmpty { Text(dates).foregroundStyle(.secondary) }
+                if type == .packing, let trip = repository.listProfile(listID).settings["Trip"], !trip.isEmpty {
+                    let dates = repository.listProfile(listID).settings["Travel Dates"] ?? ""
+                    Label(dates.isEmpty ? trip : trip + " · " + dates, systemImage: "airplane").foregroundStyle(.secondary)
                 }
-                if type == .projects {
-                    let nextCount = repository.projectNextActions.count
+                if type == .projects, !repository.projectNextActions.isEmpty {
                     Button { showingNextActions = true } label: {
-                        LabeledContent { Text("\(nextCount)") } label: { Label("Next Actions in All Projects", systemImage: "arrow.right.circle") }
+                        LabeledContent { Text("\(repository.projectNextActions.count)") } label: { Label("Next Actions in All Projects", systemImage: "arrow.right.circle") }
                     }
                 }
                 if type == .bills {
@@ -1426,7 +1459,6 @@ struct SpecializedTaskListView: View {
                     ForEach(monthlyBillTotals.keys.sorted(), id: \.self) { currency in
                         LabeledContent("Due this month" + (currency == "Unspecified" ? " (no currency)" : ""), value: SpecializedFieldFormat.amount(monthlyBillTotals[currency, default: 0], currency: currency == "Unspecified" ? nil : currency))
                     }
-                    Text("Totals include open bills with a valid amount. Due dates and recurrence are set in task details.").font(.caption).foregroundStyle(.secondary)
                 }
                 if type == .routines, let timerEnd {
                     HStack {
@@ -1628,35 +1660,42 @@ struct SpecializedTaskListView: View {
         .sheet(isPresented: $showingBulkCapture) { ShoppingBulkCapture(repository: repository, listID: listID) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                // One menu for every list control, grouped View / Add / Manage.
                 Menu {
-                    if !type.bulkFields.isEmpty {
-                        Button(selectingItems ? "Done Selecting" : "Select Items", systemImage: "checkmark.circle") { selectingItems.toggle(); selectedIDs = [] }
+                    Section("View") {
+                        if type == .shopping { Button("Filters", systemImage: "line.3.horizontal.decrease") { showingFilters = true } }
+                        if type == .packing { Toggle("Still to Pack Only", isOn: $remainingOnly) }
+                        if type == .reading {
+                            Picker("Sort Within Groups", selection: $watchSort) {
+                                ForEach(["Recently Watched", "New Releases", "Title"], id: \.self) { Text($0).tag($0) }
+                            }
+                        } else { Toggle("Sort by Name", isOn: $sortByName) }
+                        if repository.listProfile(listID).settings["Current Run"] != nil { Toggle("Show Previous Runs", isOn: $showPreviousRuns) }
+                        if type == .projects { Button("Next Actions in All Projects", systemImage: "arrow.right.circle") { showingNextActions = true } }
                     }
-                    if type == .shopping { Button("Filters & Shopping Tools", systemImage: "line.3.horizontal.decrease") { showingFilters = true } }
-                    if type == .reading {
-                        Picker("Sort Within Groups", selection: $watchSort) {
-                            ForEach(["Recently Watched", "New Releases", "Title"], id: \.self) { Text($0).tag($0) }
+                    Section("Add") {
+                        Button("Templates", systemImage: "doc.on.doc") { showsTemplates = true }
+                        if type == .shopping { Button("Buy Again", systemImage: "cart.badge.plus") { showingBuyAgain = true } }
+                        if type == .projects { Button("Add Section", systemImage: "rectangle.split.3x1") { addingSection = true } }
+                    }
+                    Section("Manage") {
+                        if !type.bulkFields.isEmpty {
+                            Button(selectingItems ? "Done Selecting" : "Select Items", systemImage: "checkmark.circle") { selectingItems.toggle(); selectedIDs = [] }
                         }
-                    } else { Toggle("Sort by Name", isOn: $sortByName) }
-                    Button("Clean Up Items", systemImage: "trash") { showingListCleanup = true }
-                    Button("Customize List", systemImage: "slider.horizontal.3") { showingSettings = true }
-                    if let action = repository.taskUndo { Button("Undo " + action.message, systemImage: "arrow.uturn.backward") { Task { await repository.undoLastTaskAction() } } }
-                    if repository.listProfile(listID).settings["Current Run"] != nil { Toggle("Show Previous Runs", isOn: $showPreviousRuns) }
-                    if type == .projects {
-                        Button("Add Section", systemImage: "rectangle.split.3x1") { addingSection = true }
-                        Button("Next Actions in All Projects", systemImage: "arrow.right.circle") { showingNextActions = true }
+                        if type == .shopping {
+                            Button("Estimate Missing Prices", systemImage: "dollarsign.circle") { priceEntryIDs = unpricedShoppingItems.map(\.id); showingPriceEntry = true }
+                                .disabled(unpricedShoppingItems.isEmpty || repository.isUndoing)
+                            Button("Categories & Aisle Order", systemImage: "arrow.up.arrow.down") { showingShoppingCategories = true }
+                            Button("Merge Duplicate Items", systemImage: "arrow.triangle.merge") { Task { await repository.mergeShoppingDuplicates(listID: listID) } }
+                        }
+                        Button("Customize List", systemImage: "slider.horizontal.3") { showingSettings = true }
+                        Button("Clean Up Items", systemImage: "trash") { showingListCleanup = true }
+                        if type == .shopping {
+                            Button("Clear Purchased", systemImage: "trash", role: .destructive) { pendingClearIDs = filteredCompletedIDs }
+                                .disabled(clearingCompleted || repository.isUndoing || filteredCompletedIDs.isEmpty)
+                        }
                     }
-                    Button("Templates", systemImage: "doc.on.doc") { showsTemplates = true }
-                    if type == .shopping {
-                        Button("Estimate Missing Prices", systemImage: "dollarsign.circle") { priceEntryIDs = unpricedShoppingItems.map(\.id); showingPriceEntry = true }
-                            .disabled(unpricedShoppingItems.isEmpty || repository.isUndoing)
-                        Button("Categories & Aisle Order", systemImage: "arrow.up.arrow.down") { showingShoppingCategories = true }
-                        Button("Buy Again", systemImage: "cart.badge.plus") { showingBuyAgain = true }
-                        Button("Clear Completed", systemImage: "trash", role: .destructive) { pendingClearIDs = filteredCompletedIDs }
-                            .disabled(clearingCompleted || repository.isUndoing || filteredCompletedIDs.isEmpty)
-                    }
-                    if type == .shopping { Button("Merge Duplicate Items", systemImage: "arrow.triangle.merge") { Task { await repository.mergeShoppingDuplicates(listID: listID) } } }
-                } label: { Label("List Tools", systemImage: "list.bullet.rectangle") }
+                } label: { Label("List Tools", systemImage: "ellipsis.circle") }
             }
         }
         .confirmationDialog("Delete Shopping Item?", isPresented: Binding(get: { pendingShoppingDelete != nil }, set: { if !$0 { pendingShoppingDelete = nil } }), titleVisibility: .visible) {
@@ -2532,6 +2571,32 @@ private struct ShoppingStoreEntry: View {
     }
 }
 
+/// Your shopper name, shown on items you add or purchase in shared shopping lists.
+/// It applies to every shopping list; it lives here, beside the list it affects, rather than in Settings.
+struct ShopperNameSection: View {
+    @Bindable var repository: TaskRepository
+    @State private var addingShopper = false
+    @State private var newShopperName = ""
+
+    var body: some View {
+        Section {
+            Picker("Your Shopper Name", selection: Binding(get: { repository.shoppingShopperName }, set: { repository.selectShoppingShopper($0) })) {
+                Text("Not Set").tag("")
+                ForEach(repository.shoppingShopperChoices, id: \.self) { Text($0).tag($0) }
+            }
+            Button("Add Shopper Name", systemImage: "person.badge.plus") { newShopperName = ""; addingShopper = true }
+        } header: { Text("Shopper") } footer: {
+            Text("Shown when you add or purchase items in shared shopping lists. Used by all your shopping lists.")
+        }
+        .alert("Add Shopper Name", isPresented: $addingShopper) {
+            TextField("Name", text: $newShopperName).textContentType(.name)
+            Button("Cancel", role: .cancel) { newShopperName = "" }
+            Button("Add") { repository.selectShoppingShopper(newShopperName); newShopperName = "" }
+                .disabled(newShopperName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+}
+
 struct SpecializedListOptions: View {
     @Bindable var repository: TaskRepository
     let listID: String
@@ -2541,6 +2606,7 @@ struct SpecializedListOptions: View {
         NavigationStack {
             Form {
                 if type == .shopping {
+                    ShopperNameSection(repository: repository)
                     NavigationLink("Categories & Aisle Order") { ShoppingCategoryManager(repository: repository, listID: listID) }
                     Section {
                         ShoppingDefaultStorePicker(repository: repository, listID: listID, selection: Binding(get: { repository.listProfile(listID).settings["Default Store"] ?? "" }, set: { value in
