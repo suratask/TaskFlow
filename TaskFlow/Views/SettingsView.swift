@@ -277,7 +277,9 @@ struct SettingsView: View {
                     NavigationLink {
                         Form {
                 Section("iCloud Sync") {
-                    Text(repository.cloudSyncStatus).font(.footnote).foregroundStyle(.secondary)
+                    Label(repository.cloudSyncStatus, systemImage: "arrow.triangle.2.circlepath.icloud")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .symbolEffect(.pulse, isActive: repository.cloudSyncStatus == "Syncing…")
                     Button("Sync Now") { Task { await repository.synchronizeCloud() } }
                     Text("Syncs notes, tags, comments, pinned lists, specialized list details, templates, and appearance and task-view settings. Reminders and events use their calendar accounts.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -493,7 +495,7 @@ private struct SettingsIcon: View {
             .font(.footnote.weight(.semibold))
             .foregroundStyle(.white)
             .frame(width: 28, height: 28)
-            .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(color, in: RoundedRectangle(cornerRadius: TaskFlowTheme.badgeRadius, style: .continuous))
     }
 }
 

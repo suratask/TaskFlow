@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import CloudKit
 import EventKit
 import Observation
 import SwiftUI
@@ -275,7 +276,7 @@ final class TaskRepository {
                 await rescheduleNotifications() // Deadline dates feed reminders.
             }
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { errorMessage = FriendlyError.message(for: error); return false }
     }
 
     /// Applies a single field to selected items and records all successful changes in one Undo.
@@ -314,7 +315,7 @@ final class TaskRepository {
                 previous.append(item)
                 snapshots[item.id] = old
                 applied.insert(item.id)
-            } catch { failures += 1; errorMessage = error.localizedDescription }
+            } catch { failures += 1; errorMessage = FriendlyError.message(for: error) }
         }
         if !previous.isEmpty {
             offerUndo("Update \(previous.count) Items", previous: previous)
@@ -339,6 +340,7 @@ final class TaskRepository {
         metadataStore.listTemplates = listTemplates
     }
     func moveProjectItems(_ items: [TaskItem], to section: String) {
+        selectionFeedbackSequence &+= 1
         guard !isUndoing, !items.isEmpty else { return }
         let current = items.map { item in currentTask(id: item.id) ?? item }
         let previous = Dictionary(current.map { ($0.id, specializedDetails($0)) }, uniquingKeysWith: { first, _ in first })
@@ -394,7 +396,7 @@ final class TaskRepository {
                 rememberStreamingServices(details.fields)
             specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = details
                 metadataStore.specializedTasks = specializedTasks
-            } catch { errorMessage = error.localizedDescription; break }
+            } catch { errorMessage = FriendlyError.message(for: error); break }
         }
         let type = listProfile(template.listID).type
         if createdAny && [.routines, .packing, .household].contains(type) {
@@ -516,7 +518,7 @@ final class TaskRepository {
         defer { shoppingQuantityUpdates.remove(task.id) }
         var details = specializedDetails(current)
         details.fields["Quantity"] = ShoppingQuantity.text(next)
-        _ = await saveSpecializedDetails(details, for: current, type: .shopping)
+        if await saveSpecializedDetails(details, for: current, type: .shopping) { selectionFeedbackSequence &+= 1 }
     }
     func shoppingDuplicate(_ item: SpecializedListTemplate.Item, listID: String, store: String) -> TaskItem? {
         var fields = item.details.fields
@@ -579,7 +581,7 @@ final class TaskRepository {
                     try reminderService.setCompleted(true, task: duplicate, metadataStore: metadataStore)
                     total = nextTotal
                     merged.append(duplicate)
-                } catch { errorMessage = error.localizedDescription }
+                } catch { errorMessage = FriendlyError.message(for: error) }
             }
             guard !merged.isEmpty, total.isFinite else { continue }
             snapshots[first.metadataID] = specializedDetails(first)
@@ -608,7 +610,7 @@ final class TaskRepository {
             specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = specializedDetails(task)
             metadataStore.specializedTasks = specializedTasks
             return id
-        } catch { errorMessage = error.localizedDescription; return nil }
+        } catch { errorMessage = FriendlyError.message(for: error); return nil }
     }
 
     var listIcons: [String: String] = [:]
@@ -672,6 +674,7 @@ final class TaskRepository {
         scheduleCloudSync()
     }
     func moveTodaySections(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        selectionFeedbackSequence &+= 1
         var order = todaySectionOrder
         order.move(fromOffsets: offsets, toOffset: destination)
         preferences.set(order.map(\.rawValue), forKey: "TaskFlow.todaySectionOrder")
@@ -969,7 +972,7 @@ final class TaskRepository {
             if merged != received { scheduleCloudSync() }
         } catch {
             isApplyingCloudSnapshot = false
-            cloudSyncStatus = "Sync unavailable: " + error.localizedDescription
+            cloudSyncStatus = FriendlyError.message(for: error)
         }
     }
 
@@ -1222,6 +1225,7 @@ final class TaskRepository {
     }
 
     func movePinnedItems(fromOffsets: IndexSet, toOffset: Int) {
+        selectionFeedbackSequence &+= 1
         var ids = pinnedItemIDs
         let moving = fromOffsets.sorted().map { ids[$0] }
         for index in fromOffsets.sorted(by: >) { ids.remove(at: index) }
@@ -1247,7 +1251,7 @@ final class TaskRepository {
             try reminderService.updateList(id: id, title: title, color: color)
             await reload()
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { errorMessage = FriendlyError.message(for: error); return false }
     }
 
     func createList(named name: String) async {
@@ -1257,7 +1261,7 @@ final class TaskRepository {
             try reminderService.createList(named: title)
             lists = visibleLists()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -1284,7 +1288,7 @@ final class TaskRepository {
             await refreshTasks()
             await rescheduleNotifications()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -1703,6 +1707,10 @@ final class TaskRepository {
     var taskRedo: TaskUndo?
     var isUndoing = false
     var feedbackSequence = 0
+    /// Light ticks for steppers, drag-and-drop, and reordering.
+    var selectionFeedbackSequence = 0
+    /// A soft tap when an undo or redo lands.
+    var undoFeedbackSequence = 0
 
     func scrollAnchor(for scope: TaskScope) -> String? {
         preferences.string(forKey: "TaskFlow.scroll.\(scope.id)")
@@ -1780,10 +1788,11 @@ final class TaskRepository {
                 taskRedo = TaskUndo(message: action.message, previous: current, wasDeleted: false)
             }
             succeeded = true
+            undoFeedbackSequence &+= 1
             feedbackSequence += 1
         } catch {
             if taskUndo?.id == action.id { taskUndo?.previous = Array(action.previous.dropFirst(restoredCount)) }
-            errorMessage = "Could not undo: " + error.localizedDescription
+            errorMessage = "Could not undo: " + FriendlyError.message(for: error)
         }
         specializedTasks = metadataStore.specializedTasks
         await refreshTasks()
@@ -1819,7 +1828,7 @@ final class TaskRepository {
             await refreshTasks()
             await rescheduleNotifications()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -1836,7 +1845,7 @@ final class TaskRepository {
             await refreshTasks()
             await rescheduleNotifications()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -1852,7 +1861,7 @@ final class TaskRepository {
             offerUndo("Priority updated", previous: [task])
             await refreshTasks()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -1871,7 +1880,7 @@ final class TaskRepository {
             await refreshTasks()
             await rescheduleNotifications()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -1891,7 +1900,7 @@ final class TaskRepository {
                 _ = try reminderService.saveTask(draft, metadataStore: metadataStore)
                 changed.append(task)
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = FriendlyError.message(for: error)
             }
         }
         offerUndo("Schedule updated", previous: changed)
@@ -1924,7 +1933,7 @@ final class TaskRepository {
             await refreshTasks()
             await rescheduleNotifications()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -1935,12 +1944,13 @@ final class TaskRepository {
             await rescheduleNotifications()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
             return false
         }
     }
 
     func moveTasks(toListID listID: String, taskIDs ids: Set<String>) async {
+        selectionFeedbackSequence &+= 1
         guard !isUndoing, lists.contains(where: { $0.id == listID }) else { return }
         let changed = tasks.filter { ids.contains($0.id) && $0.listID != listID }
         guard !changed.isEmpty else { return }
@@ -1952,7 +1962,7 @@ final class TaskRepository {
                 _ = try reminderService.saveTask(draft, metadataStore: metadataStore)
                 saved.append(task)
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = FriendlyError.message(for: error)
             }
         }
         offerUndo("Tasks moved", previous: saved)
@@ -1979,7 +1989,7 @@ final class TaskRepository {
                     _ = try reminderService.saveTask(draft, metadataStore: metadataStore)
                     changed.append(task)
                 } catch {
-                    errorMessage = error.localizedDescription
+                    errorMessage = FriendlyError.message(for: error)
                 }
             }
         }
@@ -2002,7 +2012,7 @@ final class TaskRepository {
                     _ = try reminderService.saveTask(draft, metadataStore: metadataStore)
                     changed.append(task)
                 } catch {
-                    errorMessage = error.localizedDescription
+                    errorMessage = FriendlyError.message(for: error)
                 }
             }
         }
@@ -2081,7 +2091,7 @@ final class TaskRepository {
             } else { return }
             eventSaveStatus = "Change undone"
             await refreshCalendarEvents()
-        } catch { eventSaveStatus = error.localizedDescription }
+        } catch { eventSaveStatus = FriendlyError.message(for: error) }
     }
 
     var eventStore: EKEventStore { reminderService.eventStore }
@@ -2108,7 +2118,7 @@ final class TaskRepository {
             await eventDeletionDidComplete(EventDeletion(eventID: event.id, startDate: event.startDate, scope: scope))
             return true
         } catch {
-            eventSaveStatus = "Could not delete the event: " + error.localizedDescription
+            eventSaveStatus = "Could not delete the event: " + FriendlyError.message(for: error)
             return false
         }
     }
@@ -2164,8 +2174,8 @@ final class TaskRepository {
             await refreshCalendarEvents()
             return true
         } catch {
-            eventSaveStatus = "Could not save: " + error.localizedDescription
-            errorMessage = error.localizedDescription
+            eventSaveStatus = "Could not save: " + FriendlyError.message(for: error)
+            errorMessage = FriendlyError.message(for: error)
             return false
         }
     }
@@ -2195,8 +2205,8 @@ final class TaskRepository {
             await refreshCalendarEvents()
             return true
         } catch {
-            eventSaveStatus = "Could not save: " + error.localizedDescription
-            errorMessage = error.localizedDescription
+            eventSaveStatus = "Could not save: " + FriendlyError.message(for: error)
+            errorMessage = FriendlyError.message(for: error)
             return false
         }
     }
@@ -2216,8 +2226,8 @@ final class TaskRepository {
             await refreshCalendarEvents()
             return true
         } catch {
-            eventSaveStatus = "Could not save: " + error.localizedDescription
-            errorMessage = error.localizedDescription
+            eventSaveStatus = "Could not save: " + FriendlyError.message(for: error)
+            errorMessage = FriendlyError.message(for: error)
             return false
         }
     }
@@ -2406,7 +2416,7 @@ final class TaskRepository {
             await consumeWatchedEpisodeActions()
             resumeReadingPreviews()
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { errorMessage = FriendlyError.message(for: error); return false }
     }
 
     /// Preserve both originals for Undo; the incoming entry is archived and hidden after consolidation.
@@ -2435,7 +2445,7 @@ final class TaskRepository {
             await refreshTasks()
             openTask(id: target.id)
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { errorMessage = FriendlyError.message(for: error); return false }
     }
 
     func saveMediaItem(_ details: SpecializedTaskDetails, title: String, note: String, tags: [String], for task: TaskItem) async -> Bool {
@@ -2470,7 +2480,7 @@ final class TaskRepository {
             await refreshTasks()
             resumeReadingPreviews()
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { errorMessage = FriendlyError.message(for: error); return false }
     }
 
     /// Import a reviewed shopping batch with one reload and one undo action.
@@ -2541,7 +2551,7 @@ final class TaskRepository {
                     latest.fields["Auto Tags"] = ReadingMedia.suggestedTags(latest.fields, includeGenres: false).joined(separator: ",")
                     if draft.title != current.title || draft.tags != current.tags {
                         do { _ = try reminderService.saveTask(draft, metadataStore: metadataStore) }
-                        catch { errorMessage = error.localizedDescription }
+                        catch { errorMessage = FriendlyError.message(for: error) }
                     }
                     latest.fields["Preview Status"] = "Ready"
                 } else { latest.fields["Preview Status"] = "Unavailable" }
@@ -2807,7 +2817,7 @@ final class TaskRepository {
                 rememberShoppingEstimate(title: draft.title, fields: details.fields)
                 specializedTasks[reminderService.metadataIdentifier(forReminderID: id)] = details
                 count += 1
-            } catch { errorMessage = error.localizedDescription; break }
+            } catch { errorMessage = FriendlyError.message(for: error); break }
         }
         if count > 0 {
             metadataStore.specializedTasks = specializedTasks
@@ -2851,7 +2861,7 @@ final class TaskRepository {
             await refreshTasks()
             await rescheduleNotifications()
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { errorMessage = FriendlyError.message(for: error); return false }
     }
 
     func saveTask(_ draft: TaskDraft) async -> Bool {
@@ -2865,7 +2875,7 @@ final class TaskRepository {
             await rescheduleNotifications()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
             return false
         }
     }
@@ -2888,7 +2898,7 @@ final class TaskRepository {
             do {
                 try reminderService.deleteTask(id: task.id, metadataStore: metadataStore)
                 deleted.append(task)
-            } catch { errorMessage = error.localizedDescription }
+            } catch { errorMessage = FriendlyError.message(for: error) }
         }
         if !deleted.isEmpty {
             // A fetch started before these deletions must not restore them.
@@ -2914,7 +2924,7 @@ final class TaskRepository {
             if selectedTaskID == task.id { selectedTaskID = nil }
             await rescheduleNotifications()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = FriendlyError.message(for: error)
         }
     }
 
@@ -3093,7 +3103,7 @@ final class TaskRepository {
         } catch {
             if generation == draftWriteGeneration {
                 noteDrafts = previousDrafts
-                errorMessage = "Could not recoverably save this draft: " + error.localizedDescription
+                errorMessage = "Could not recoverably save this draft: " + FriendlyError.message(for: error)
             }
             return false
         }
@@ -3104,14 +3114,14 @@ final class TaskRepository {
         var drafts = noteDrafts.filter { $0.id != draft.id }
         drafts.insert(draft, at: 0)
         do { try metadataStore.writeNoteDrafts(drafts); noteDrafts = drafts; return true }
-        catch { errorMessage = "Could not recoverably save this draft: " + error.localizedDescription; return false }
+        catch { errorMessage = "Could not recoverably save this draft: " + FriendlyError.message(for: error); return false }
     }
 
     func discardNoteDraft(id: UUID) {
         draftWriteGeneration &+= 1
         let drafts = noteDrafts.filter { $0.id != id }
         do { try metadataStore.writeNoteDrafts(drafts); noteDrafts = drafts }
-        catch { errorMessage = error.localizedDescription }
+        catch { errorMessage = FriendlyError.message(for: error) }
     }
 
     func restoreNoteVersion(noteID: UUID, revision: NoteRevision) {
@@ -3738,5 +3748,67 @@ struct ReadingLinkMetadata: Equatable, Sendable {
             text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
         }
         return text.split(whereSeparator: { $0.isWhitespace }).count
+    }
+}
+
+/// Turns system errors into short, specific messages that say what to do next.
+/// TaskFlow's own errors (domains starting "TaskFlow") are already written for people and pass through.
+enum FriendlyError {
+    static func message(for error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain.hasPrefix("TaskFlow") { return nsError.localizedDescription }
+        if nsError.domain == EKErrorDomain, let code = EKError.Code(rawValue: nsError.code) {
+            switch code {
+            case .calendarReadOnly, .calendarIsImmutable, .sourceDoesNotAllowCalendarAddDelete, .calendarDoesNotAllowReminders, .calendarDoesNotAllowEvents:
+                return "Couldn’t save — that list or calendar is read-only. Choose another one."
+            case .eventStoreNotAuthorized:
+                return "TaskFlow doesn’t have access to Reminders or Calendar. You can turn it on in Settings."
+            case .noCalendar, .calendarHasNoSource, .objectBelongsToDifferentStore:
+                return "That list or calendar is no longer available. Choose another one."
+            case .datesInverted, .durationGreaterThanRecurrence:
+                return "The end time needs to be after the start time."
+            case .noStartDate, .noEndDate:
+                return "Add a start and end time, then try again."
+            case .recurringReminderRequiresDueDate:
+                return "Repeating reminders need a due date."
+            default:
+                break
+            }
+        }
+        if nsError.domain == CKErrorDomain, let code = CKError.Code(rawValue: nsError.code) {
+            switch code {
+            case .networkUnavailable, .networkFailure, .serviceUnavailable, .requestRateLimited, .zoneBusy:
+                return "iCloud isn’t reachable right now. Your changes are saved and will sync when it’s back."
+            case .notAuthenticated:
+                return "Sign in to iCloud in Settings to sync TaskFlow between your devices."
+            case .quotaExceeded:
+                return "Your iCloud storage is full, so TaskFlow can’t sync. Free up space in Settings → iCloud."
+            default:
+                break
+            }
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:
+                return "You’re offline. Try again when you’re connected."
+            case .timedOut:
+                return "That took too long to respond. Try again."
+            default:
+                break
+            }
+        }
+        if let cocoa = error as? CocoaError {
+            switch cocoa.code {
+            case .fileWriteOutOfSpace:
+                return "Your device is out of storage. Free up space and try again."
+            case .fileReadNoSuchFile, .fileNoSuchFile:
+                return "That file is no longer available."
+            case .fileReadNoPermission, .fileWriteNoPermission:
+                return "TaskFlow doesn’t have permission to use that file."
+            default:
+                break
+            }
+        }
+        return nsError.localizedDescription
     }
 }

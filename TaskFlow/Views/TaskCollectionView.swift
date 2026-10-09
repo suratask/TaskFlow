@@ -4,6 +4,7 @@ import EventKit
 import EventKitUI
 import MapKit
 import SwiftUI
+import TipKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -37,6 +38,7 @@ struct TaskCollectionView: View {
     @State private var pendingCompletedItems: [TaskItem] = []
     @State private var clearingCompleted = false
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Group {
             if (repository.selectedScope == .today || repository.selectedScope == .planMyDay) && viewModeOverride == nil {
@@ -120,9 +122,6 @@ struct TaskCollectionView: View {
                         .accessibilityHint("Touch and hold for more options")
 
                         Menu {
-                            if let action = repository.taskUndo {
-                                Button("Undo " + action.message, systemImage: "arrow.uturn.backward") { Task { await repository.undoLastTaskAction() } }
-                            }
                             if let action = repository.taskRedo {
                                 Button("Redo " + action.message, systemImage: "arrow.uturn.forward") { Task { await repository.redoLastTaskAction() } }
                                     .keyboardShortcut("z", modifiers: [.command, .shift])
@@ -134,7 +133,7 @@ struct TaskCollectionView: View {
                             }
                             Button("Manage Pinned Lists", systemImage: "pin") { showsPinnedLists = true }
                             Button("Select Tasks", systemImage: "checkmark.circle") { beginBulkTagging() }
-                            Button("Clear Completed Reminders", systemImage: "trash", role: .destructive) { promptToClearCompleted() }
+                            Button("Clear Completed", systemImage: "trash", role: .destructive) { promptToClearCompleted() }
                                 .disabled(clearingCompleted || repository.isUndoing || repository.completedTasksInSelectedScope.isEmpty)
                             Picker("View As", selection: Binding(
                                 get: { effectiveViewMode == .board ? TaskRepository.TaskViewMode.board : .list },
@@ -357,6 +356,11 @@ struct TaskCollectionView: View {
                 EmptyTaskStateView(repository: repository, editorDraft: $editorDraft)
                     .listRowBackground(Color.clear)
             } else {
+                // First-run guidance in place of an empty or unexplained screen.
+                if !isBulkTagging {
+                    TipView(TaskGesturesTip()).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                    TipView(QuickAddTip()).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                }
                 ForEach(repository.groupedRootTasks) { group in
                     Section {
                         ForEach(group.tasks) { task in
@@ -454,6 +458,8 @@ struct TaskCollectionView: View {
         .listRowSpacing(0)
         .listSectionSpacing(.compact)
         .coordinateSpace(name: "task-list")
+        // Completed tasks slide out of the open list and reorders move smoothly; Reduce Motion turns this off.
+        .animation(reduceMotion ? nil : .snappy, value: repository.tasksRevision)
         .onPreferenceChange(TaskScrollOffsets.self) { values in
             guard !isRestoringTaskScroll, let id = TaskScrollOffsets.topItem(values) else { return }
             repository.saveScrollAnchor(id, for: repository.selectedScope)
@@ -1778,7 +1784,7 @@ private struct SelectedDayTaskRow: View {
             Button {
                 Task { await repository.toggleCompletion(for: task) }
             } label: {
-                Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle").contentTransition(.symbolEffect(.replace)).symbolEffect(.bounce, value: task.isCompleted)
                     .font(.title3.weight(.bold))
                     .foregroundStyle(task.isCompleted ? Color.green : color)
             }
@@ -2224,7 +2230,7 @@ struct CalendarEventDetailView: View {
                 }
             }
             .disabled(isDeleting)
-            .overlay { if isDeleting { ProgressView("Deleting event…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+            .overlay { if isDeleting { ProgressView("Deleting event…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius)) } }
             .listStyle(.insetGrouped)
             .taskFlowThemedBackground()
             .navigationTitle("Event Details")
@@ -2506,9 +2512,9 @@ private struct AgendaDaySection: View {
                     }
                 }
             }
-            .background(TaskFlowTheme.surface, in: RoundedRectangle(cornerRadius: 18))
+            .background(TaskFlowTheme.surface, in: RoundedRectangle(cornerRadius: TaskFlowTheme.panelRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: 18).strokeBorder(TaskFlowTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: TaskFlowTheme.panelRadius).strokeBorder(TaskFlowTheme.border, lineWidth: 1)
             }
         }
         .padding(.bottom, 8)
@@ -2534,7 +2540,7 @@ private struct AgendaDaySection: View {
                         await repository.toggleCompletion(for: task)
                     }
                 } label: {
-                    Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                    Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle").contentTransition(.symbolEffect(.replace)).symbolEffect(.bounce, value: task.isCompleted)
                         .font(.title2)
                         .foregroundStyle(accentColor(for: item))
                         .frame(width: 44, height: 44)
@@ -2742,7 +2748,7 @@ private struct PinnedTaskCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(item.title), \(count) tasks, \(subtitle)")
     }
@@ -2926,22 +2932,21 @@ struct EmptyTaskStateView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     #endif
-                } else if repository.accessState == .granted {
+                } else if hasFilters {
+                    // One clear action: when filters or search hide everything, the fix is to clear them.
+                    Button {
+                        withAnimation { repository.clearTaskFilters() }
+                    } label: {
+                        Label(searchText.isEmpty ? "Clear Filters" : "Clear Search", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else if repository.accessState == .granted, repository.selectedScope != .completed {
                     Button {
                         editorDraft = repository.makeDraft()
                     } label: {
-                        Label("Create Task", systemImage: "plus.circle.fill")
+                        Label("New Task", systemImage: "plus.circle.fill")
                     }
                     .buttonStyle(.borderedProminent)
-                }
-
-                if hasFilters {
-                    Button {
-                        repository.clearTaskFilters()
-                    } label: {
-                        Label("Clear Filters", systemImage: "line.3.horizontal.decrease.circle")
-                    }
-                    .buttonStyle(.bordered)
                 }
             }
         }
@@ -2953,16 +2958,47 @@ struct EmptyTaskStateView: View {
         !repository.searchQuery.isEmpty || repository.hasActiveFilters
     }
 
+    private var searchText: String { repository.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Specific to where the user is, so an empty screen explains itself.
     private var emptyTitle: String {
-        hasFilters ? "No Matching Tasks" : "No Tasks"
+        if !searchText.isEmpty { return "No Results for “\(searchText)”" }
+        if repository.hasActiveFilters { return "No Matching Tasks" }
+        switch repository.selectedScope {
+        case .today: return "Nothing Due Today"
+        case .next7Days, .upNext: return "Nothing Scheduled"
+        case .flagged: return "No Flagged Tasks"
+        case .completed: return "Nothing Completed Yet"
+        case .inbox: return "Inbox Zero"
+        case .list: return "This List Is Empty"
+        default: return "No Tasks"
+        }
     }
 
     private var emptyDescription: String {
-        hasFilters ? "Try clearing filters or changing the current view." : "Create a task or adjust this view to start planning."
+        if !searchText.isEmpty { return "Check the spelling, or search for a #tag." }
+        if repository.hasActiveFilters { return "Clear filters to see everything in this view." }
+        switch repository.selectedScope {
+        case .today: return "Enjoy the open time, or add something you want to get done today."
+        case .next7Days, .upNext: return "Tasks with a due date appear here, grouped by day."
+        case .flagged: return "Flag a task to keep it close at hand."
+        case .completed: return "Tasks you complete appear here."
+        case .inbox: return "Everything is handled. New tasks land here first."
+        default: return "Add a task to get started."
+        }
     }
 
     private var emptyIcon: String {
-        hasFilters ? "line.3.horizontal.decrease.circle" : "checkmark.circle"
+        if !searchText.isEmpty { return "magnifyingglass" }
+        if repository.hasActiveFilters { return "line.3.horizontal.decrease.circle" }
+        switch repository.selectedScope {
+        case .today: return "sun.max"
+        case .next7Days, .upNext: return "calendar"
+        case .flagged: return "flag"
+        case .completed: return "checkmark.circle"
+        case .inbox: return "tray"
+        default: return "checklist"
+        }
     }
 }
 
@@ -3121,7 +3157,7 @@ struct TaskRowView: View {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
         } else {
-            Image(systemName: task.isCompleted ? "largecircle.fill.circle" : "circle")
+            Image(systemName: task.isCompleted ? "largecircle.fill.circle" : "circle").contentTransition(.symbolEffect(.replace)).symbolEffect(.bounce, value: task.isCompleted)
                 .foregroundStyle(task.isCompleted ? listColor : Color.secondary)
         }
     }
@@ -3129,7 +3165,7 @@ struct TaskRowView: View {
     @ViewBuilder private var dueLabel: some View {
         if let dueDate = task.dueDate {
             Text(dueDate.formatted(date: .abbreviated, time: task.hasDueTime ? .shortened : .omitted))
-                .foregroundStyle(task.isOverdue() ? Color.red : Color.secondary)
+                .foregroundStyle(TaskFlowTheme.dueColor(isOverdue: task.isOverdue()))
         }
     }
     private var listLabel: some View {
@@ -3819,7 +3855,7 @@ private struct CalendarHourGrid: View {
                                         }
                                         .padding(6)
                                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                                        .background(color(event.calendarID).opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+                                        .background(color(event.calendarID).opacity(0.18), in: RoundedRectangle(cornerRadius: TaskFlowTheme.badgeRadius))
                                         .overlay(alignment: .leading) {
                                             Capsule().fill(color(event.calendarID)).frame(width: 3)
                                         }
@@ -4049,8 +4085,8 @@ private struct TaskBoardView: View {
                         .padding(12)
                         .frame(width: min(320, max(260, geometry.size.width - 48)))
                         .frame(height: max(200, geometry.size.height - 24))
-                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay { RoundedRectangle(cornerRadius: 12).stroke(targetedStatus == status ? repository.appTheme.primary : .clear, lineWidth: 2) }
+                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius))
+                        .overlay { RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius).stroke(targetedStatus == status ? repository.appTheme.primary : .clear, lineWidth: 2) }
                         .dropDestination(for: String.self) { ids, _ in
                             guard status != .overdue else { return false }
                             let matches = repository.tasks.filter { ids.contains($0.id) }
@@ -4195,7 +4231,7 @@ private struct TaskBoardCard: View {
                 if let due = task.dueDate {
                     Text(due.formatted(date: .abbreviated, time: task.hasDueTime ? .shortened : .omitted))
                         .font(.caption)
-                        .foregroundStyle(task.isOverdue() ? Color.red : Color.secondary)
+                        .foregroundStyle(TaskFlowTheme.dueColor(isOverdue: task.isOverdue()))
                 }
                 if !task.tags.isEmpty {
                     Text(task.tags.prefix(2).map { "#" + $0 }.joined(separator: "  "))

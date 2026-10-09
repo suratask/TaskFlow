@@ -172,7 +172,7 @@ private struct SmartListIconPicker: View {
                         .font(.headline)
                         .foregroundStyle(selection == icon ? Color.white : Color.purple)
                         .frame(width: 44, height: 44)
-                        .background(iconBackground(for: icon), in: RoundedRectangle(cornerRadius: 8))
+                        .background(iconBackground(for: icon), in: RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(icon.accessibilityTitle)

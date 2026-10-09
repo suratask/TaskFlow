@@ -1011,7 +1011,7 @@ struct QuickNoteFormattingToolbar: View {
             Label(title, systemImage: icon)
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 10).frame(minHeight: 44)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius))
         }.buttonStyle(.plain).accessibilityLabel(title)
     }
 
@@ -2180,7 +2180,7 @@ private struct NoteAttachmentCard: View {
             } label: {
                 HStack(alignment: .center, spacing: 12) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 10).fill(attachment.tint.opacity(0.12))
+                        RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius).fill(attachment.tint.opacity(0.12))
                         if let image {
                             Image(uiImage: image).resizable().scaledToFill()
                         } else if loading {
@@ -2190,7 +2190,7 @@ private struct NoteAttachmentCard: View {
                         }
                     }
                     .frame(width: 88, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .clipShape(RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius))
                     VStack(alignment: .leading, spacing: 4) {
                         Text(fetchedTitle ?? attachment.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(3)
                         if attachment.kind == .url, let url {

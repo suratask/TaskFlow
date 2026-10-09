@@ -154,7 +154,7 @@ struct ListTypeSample: View {
                 Text(type.example.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius))
     }
 }
 
@@ -789,8 +789,8 @@ struct ListIconPicker: View {
                         }
                         .frame(maxWidth: .infinity, minHeight: 85)
                         .padding(6)
-                        .background(Color.accentColor.opacity(selection == symbol ? 0.18 : 0.06), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(selection == symbol ? Color.accentColor : .clear, lineWidth: 2))
+                        .background(Color.accentColor.opacity(selection == symbol ? 0.18 : 0.06), in: RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius))
+                        .overlay(RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius).stroke(selection == symbol ? Color.accentColor : .clear, lineWidth: 2))
                     }.buttonStyle(.plain).accessibilityAddTraits(selection == symbol ? .isSelected : [])
                 }
             }.padding()

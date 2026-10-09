@@ -306,7 +306,7 @@ private struct DependencyGroup: View {
                     onSelect(task)
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                        Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle").contentTransition(.symbolEffect(.replace)).symbolEffect(.bounce, value: task.isCompleted)
                             .foregroundStyle(task.isCompleted ? .green : .secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(task.title)

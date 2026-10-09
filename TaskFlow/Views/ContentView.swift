@@ -160,18 +160,16 @@ struct ContentView: View {
             registerSystemUndo(id: id)
         }
         .sensoryFeedback(.success, trigger: repository.feedbackSequence)
+        .sensoryFeedback(.selection, trigger: repository.selectionFeedbackSequence)
+        .sensoryFeedback(.impact(weight: .light), trigger: repository.undoFeedbackSequence)
+        .overlay(alignment: .bottom) {
+            // Undo and error messages appear as toasts above the tab bar instead of alerts or list rows.
+            StatusToastHost(repository: repository, bottomInset: usesCompactNavigation ? 64 : TaskFlowTheme.Spacing.large)
+        }
         .taskFlowThemedBackground()
         .preferredColorScheme(preferredColorScheme)
         .tint(repository.appTheme.primary)
         .accentColor(repository.appTheme.primary)
-        .alert("TaskFlow Studio", isPresented: Binding(
-            get: { repository.errorMessage != nil },
-            set: { if !$0 { repository.errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(repository.errorMessage ?? "")
-        }
     }
 
     private var landscapeTaskSplitView: some View {

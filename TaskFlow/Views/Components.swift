@@ -391,12 +391,6 @@ struct TodayDashboardView: View {
                     Button("Choose Today’s Sections", systemImage: "slider.horizontal.3") { customizingToday = true }
                 }
             }
-            if let undo = repository.taskUndo {
-                Section { Button("Undo " + undo.message, systemImage: "arrow.uturn.backward") { Task { await repository.undoLastTaskAction() } }.disabled(repository.isUndoing) }
-            }
-            if let error = repository.errorMessage { Section { Text(error).foregroundStyle(.red) } }
-
-
         }
         .listStyle(.insetGrouped)
         }
@@ -702,7 +696,7 @@ struct TodayDashboardView: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 52)
-            .padding(6).background(repository.appTheme.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .padding(6).background(repository.appTheme.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius))
         }.buttonStyle(.plain).accessibilityLabel("\(count) \(title)")
     }
     @ViewBuilder private var eventSpotlight: some View {
@@ -928,6 +922,19 @@ struct AddMenuTip: Tip {
 }
 
 /// One-time hint for planning swipes in Today's Suggested section.
+/// First-run tips, shown one at a time in the task list (TipKit shows each until it's dismissed or learned).
+struct TaskGesturesTip: Tip {
+    var title: Text { Text("Quick Actions") }
+    var message: Text? { Text("Swipe right to complete. Touch and hold a task to change its date, priority, tags, or list without opening it.") }
+    var image: Image? { Image(systemName: "hand.tap") }
+}
+
+struct QuickAddTip: Tip {
+    var title: Text { Text("Add Tasks Fast") }
+    var message: Text? { Text("Type a task at the bottom of any list. Long-press + for Quick Capture, a new event, or a note.") }
+    var image: Image? { Image(systemName: "plus.circle") }
+}
+
 struct PlanTodayTip: Tip {
     var title: Text { Text("Plan Your Day") }
     var message: Text? { Text("Swipe right on a suggested task to add it to Today. Swipe left on an overdue task to move it to tomorrow.") }
@@ -1068,7 +1075,7 @@ struct SpecializedTaskEditor: View {
                     }
                 }
                 if !type.stages.isEmpty {
-                    Picker(type == .reading ? "Progress" : "Stage", selection: field(type == .reading ? "Progress" : "Stage")) {
+                    Picker("Stage", selection: field(type == .reading ? "Progress" : "Stage")) {
                         Text("Not Set").tag("")
                         ForEach(type.stages, id: \.self) { Text($0).tag($0) }
                     }
@@ -1167,10 +1174,10 @@ struct SpecializedTaskEditor: View {
                     }
                     Stepper("Radius: \(Int(current.radius)) m", value: Binding(get: { location?.radius ?? 100 }, set: { location?.radius = $0 }), in: 50...1000, step: 50)
                 }
-                Button("Remove Place", role: .destructive) { location = nil }
+                Button("Remove Location", role: .destructive) { location = nil }
             }
             HStack {
-                TextField(location == nil ? "Search for a store or address" : "Change place", text: $locationQuery)
+                TextField(location == nil ? "Search for a store or address" : "Change location", text: $locationQuery)
                     .onSubmit { searchLocation() }
                     .submitLabel(.search)
                 if searchingLocation { ProgressView() }
@@ -1186,7 +1193,7 @@ struct SpecializedTaskEditor: View {
                 } label: { LocationLookupRow(result: result) }
                     .tint(.primary)
             }
-        } header: { Text("Place") } footer: {
+        } header: { Text("Location") } footer: {
             if !locationError.isEmpty { Text(locationError) }
             else { Text("Choose a place to get a Reminders alert when you arrive, and to open it in Maps.") }
         }
@@ -1410,13 +1417,13 @@ struct SpecializedTaskListView: View {
                             ScrollView {
                                 LazyVStack(spacing: 12) {
                                     ForEach(rowsByGroup[section, default: []]) { task in
-                                        itemRow(task, milestones: milestones, sections: sectionNames).padding(12).background(TaskFlowTheme.surface, in: RoundedRectangle(cornerRadius: 12)).draggable(task.id)
+                                        itemRow(task, milestones: milestones, sections: sectionNames).padding(12).background(TaskFlowTheme.surface, in: RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius)).draggable(task.id)
                                     }
                                 }
                             }
                             Button("Add Task", systemImage: "plus") { editorDraft = repository.makeDraft() }
                         }.padding(12).frame(width: 300, height: 480)
-                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: TaskFlowTheme.cardRadius))
                         .dropDestination(for: String.self) { ids, _ in
                             let dropped = visible.filter { ids.contains($0.id) }
                             guard !dropped.isEmpty else { return false }
@@ -1550,7 +1557,7 @@ struct SpecializedTaskListView: View {
                             }
                         }
                     } else {
-                        DisclosureGroup("\(type == .shopping ? "Purchased" : "Completed") (\(completed.count))", isExpanded: $completedExpanded) {
+                        DisclosureGroup("Completed (\(completed.count))", isExpanded: $completedExpanded) {
                             ForEach(completed) { itemRow($0, milestones: milestones, sections: sectionNames) }
                         }
                     }
@@ -1559,9 +1566,6 @@ struct SpecializedTaskListView: View {
                             .disabled(clearingCompleted || repository.isUndoing)
                     }
                 }
-            }
-            if let action = repository.taskUndo {
-                Section { Button("Undo " + action.message, systemImage: "arrow.uturn.backward") { Task { await repository.undoLastTaskAction() } } }
             }
         }
         }
@@ -1691,7 +1695,7 @@ struct SpecializedTaskListView: View {
                         Button("Customize List", systemImage: "slider.horizontal.3") { showingSettings = true }
                         Button("Clean Up Items", systemImage: "trash") { showingListCleanup = true }
                         if type == .shopping {
-                            Button("Clear Purchased", systemImage: "trash", role: .destructive) { pendingClearIDs = filteredCompletedIDs }
+                            Button("Clear Completed", systemImage: "trash", role: .destructive) { pendingClearIDs = filteredCompletedIDs }
                                 .disabled(clearingCompleted || repository.isUndoing || filteredCompletedIDs.isEmpty)
                         }
                     }
@@ -1907,7 +1911,7 @@ struct SpecializedTaskListView: View {
                     Button("Reset Filters") { storeFilter = nil; showFavorites = false }
                 }
                 Section("Shopping Tools") {
-                    Button("Paste Several Items", systemImage: "text.badge.plus") { pendingFilterTool = "paste"; showingFilters = false }
+                    Button("Paste Items", systemImage: "text.badge.plus") { pendingFilterTool = "paste"; showingFilters = false }
                     Button("Buy Again", systemImage: "cart.badge.plus") { pendingFilterTool = "again"; showingFilters = false }
                     Button("Estimate Missing Prices (\(unpricedShoppingItems.count))", systemImage: "dollarsign.circle") {
                         priceEntryIDs = unpricedShoppingItems.map(\.id); pendingFilterTool = "prices"; showingFilters = false
@@ -2001,7 +2005,7 @@ struct SpecializedTaskListView: View {
             }
             if type != .reading {
                 Button { Task { await repository.toggleCompletion(for: task) } } label: {
-                    Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle").font(type == .shopping ? .title : .title2).frame(minWidth: type == .shopping ? 56 : 44, minHeight: type == .shopping ? 56 : 44).contentShape(Rectangle())
+                    Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle").contentTransition(.symbolEffect(.replace)).symbolEffect(.bounce, value: task.isCompleted).font(type == .shopping ? .title : .title2).frame(minWidth: type == .shopping ? 56 : 44, minHeight: type == .shopping ? 56 : 44).contentShape(Rectangle())
                 }.buttonStyle(.borderless).disabled(selectingItems).accessibilityLabel((task.isCompleted ? "Reopen " : "Complete ") + task.title)
             }
             VStack(alignment: .leading, spacing: isWatchCard ? 12 : 4) {
@@ -2102,10 +2106,10 @@ struct SpecializedTaskListView: View {
 
                         }
                         if ReadingMedia.action(for: format) == "Watch", let provider {
-                            Text(provider).font(.caption2).foregroundStyle(.tint).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 6).padding(.vertical, 3).background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+                            Text(provider).font(.caption2).foregroundStyle(.tint).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 6).padding(.vertical, 3).background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: TaskFlowTheme.badgeRadius))
                         }
                     }
-                    if type != .shopping, !shoppingMode, let date = task.dueDate { Text(date, format: .dateTime.month().day()).font(.caption).foregroundStyle(task.isOverdue() ? .red : .secondary) }
+                    if type != .shopping, !shoppingMode, let date = task.dueDate { Text(date, format: .dateTime.month().day()).font(.caption).foregroundStyle(TaskFlowTheme.dueColor(isOverdue: task.isOverdue())) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 }.padding(.trailing, isWatchCard && !selectingItems ? 48 : 0)
             }.buttonStyle(.plain)
@@ -2180,7 +2184,7 @@ struct SpecializedTaskListView: View {
         .padding(.vertical, isWatchCard ? 16 : 0)
         .padding(.horizontal, isWatchCard ? 12 : 0)
         .background {
-            if isWatchCard { RoundedRectangle(cornerRadius: 18).fill(TaskFlowTheme.surface) }
+            if isWatchCard { RoundedRectangle(cornerRadius: TaskFlowTheme.panelRadius).fill(TaskFlowTheme.surface) }
         }
         .overlay(alignment: .topTrailing) {
             if isWatchCard, !selectingItems { readingCardMenu(task).padding(8) }
@@ -2229,7 +2233,7 @@ struct SpecializedTaskListView: View {
                 if let url = Self.mapsURL(place: task.location, destination: destination, directions: true) {
                     Button("Get Directions", systemImage: "arrow.triangle.turn.up.right.diamond") { openURL(url) }
                 }
-                Button(task.location == nil ? "Add Place" : "Change Place", systemImage: "mappin.and.ellipse") { editingItem = task }
+                Button(task.location == nil ? "Add Location" : "Change Location", systemImage: "mappin.and.ellipse") { editingItem = task }
                 if let id = repository.specializedDetails(task).fields["Shopping List ID"], repository.lists.contains(where: { $0.id == id }) { Button("Open Shopping List", systemImage: "cart") { repository.selectedScope = .list(id) } }
             }
             if type == .shopping { Button("Buy Again", systemImage: "cart.badge.plus") { repeatPurchase = task } }
@@ -2238,7 +2242,7 @@ struct SpecializedTaskListView: View {
             }
             let fields = repository.specializedDetails(task).fields
             if type == .appointments {
-                Button("Create Follow-up Reminder", systemImage: "calendar.badge.plus") {
+                Button("Create Follow-up Task", systemImage: "calendar.badge.plus") {
                     var draft = repository.makeDraft()
                     draft.listID = listID
                     draft.title = "Follow up: " + task.title
@@ -2898,7 +2902,7 @@ struct ProjectNextActionsView: View {
                     }
                     if let due = task.dueDate {
                         Text(SpecializedFieldFormat.date(SpecializedTaskDetails.dateText(due)) ?? due.formatted(date: .abbreviated, time: .omitted))
-                            .font(.caption).foregroundStyle(task.isOverdue() ? .red : .secondary)
+                            .font(.caption).foregroundStyle(TaskFlowTheme.dueColor(isOverdue: task.isOverdue()))
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.buttonStyle(.plain)
@@ -3273,7 +3277,7 @@ struct CachedMediaPreview: View {
     private var previewWidth: CGFloat { poster && !expanded ? 72 : previewHeight * aspect }
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12))
+            RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius).fill(Color.secondary.opacity(0.12))
             if let image {
                 if poster && !expanded {
                     Image(uiImage: image).resizable().scaledToFill().frame(width: previewWidth, height: previewHeight).clipped()
@@ -3282,7 +3286,7 @@ struct CachedMediaPreview: View {
             else { Image(systemName: ReadingMedia.symbol(for: format)).foregroundStyle(.secondary) }
         }
         .frame(width: previewWidth, height: previewHeight)
-        .clipped().clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipped().clipShape(RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius))
         .accessibilityHidden(true)
         .task(id: (rawURL ?? "") + (localPreview ?? "")) {
             image = nil
