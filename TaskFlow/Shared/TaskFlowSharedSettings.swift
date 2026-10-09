@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+@preconcurrency import EventKit
 import SwiftUI
 import WidgetKit
 
@@ -497,3 +498,37 @@ enum ShoppingReminderNotes {
     }
 }
 
+
+@MainActor
+enum EpisodeWidgetActionHandler {
+    static var reconcile: (() async -> Void)?
+    static func reconcileIfAvailable() async { await reconcile?() }
+}
+
+struct MarkWidgetEpisodeWatchedIntent: AppIntent {
+    static var title: LocalizedStringResource = "Mark Episode Watched"
+    static var openAppWhenRun = false
+    @Parameter(title: "Task") var taskID: String
+    @Parameter(title: "Metadata") var metadataID: String
+    @Parameter(title: "Show") var showID: Int
+    @Parameter(title: "Episode") var episodeID: Int
+    init() {}
+    init(taskID: String, metadataID: String, showID: Int, episodeID: Int) {
+        self.taskID = taskID; self.metadataID = metadataID; self.showID = showID; self.episodeID = episodeID
+    }
+    func perform() async throws -> some IntentResult {
+        let store = EKEventStore()
+        let authorization = EKEventStore.authorizationStatus(for: .reminder)
+        guard authorization == .fullAccess,
+              let reminder = store.calendarItem(withIdentifier: taskID) as? EKReminder, !reminder.isCompleted,
+              (reminder.calendarItemExternalIdentifier.flatMap { $0.isEmpty ? nil : $0 } ?? reminder.calendarItemIdentifier) == metadataID else { throw CocoaError(.fileReadNoSuchFile) }
+        let metadata = TaskFlowSharedWidgetMetadata.metadata(for: taskID, externalID: reminder.calendarItemExternalIdentifier)
+        let fields = WatchedEpisodeActionStore.applying(WatchedEpisodeActionStore.pending(), fields: metadata.specializedFields ?? [:], taskID: taskID, metadataID: metadataID)
+        guard ReadingMedia.markingEpisodeWatched(fields, showID: showID, episodeID: episodeID) != nil else { throw CocoaError(.validationMissingMandatoryProperty) }
+        try WatchedEpisodeActionStore.record(WatchedEpisodeAction(taskID: taskID, metadataID: metadataID, showID: showID, episodeID: episodeID))
+        await EpisodeNotificationActions.retire(taskID: taskID, showID: showID, episodeID: episodeID)
+        await EpisodeWidgetActionHandler.reconcileIfAvailable()
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}

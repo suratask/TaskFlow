@@ -1381,6 +1381,13 @@ enum ReminderAlert: Codable, Hashable {
 
 /// Optional TaskFlow metadata; native reminder titles, dates, and completion stay in EventKit.
 enum SpecializedListType: String, Codable, CaseIterable, Identifiable {
+    static func suggested(for name: String) -> SpecializedListType? {
+        let words = name.lowercased().split { !$0.isLetter }.map(String.init)
+        if words.contains(where: { ["shopping", "groceries", "grocery"].contains($0) }) { return .shopping }
+        if words.contains("later") && (words.contains("read") || words.contains("watch")) { return .reading }
+        return nil
+    }
+
     case standard = "Standard", shopping = "Shopping & Groceries", projects = "Projects & Work"
     case household = "Household & Chores", packing = "Packing & Travel", bills = "Bills & Renewals"
     case reading = "Reading & Watch Later", errands = "Errands", appointments = "Appointments & Follow-ups"
@@ -1422,7 +1429,7 @@ enum SpecializedListType: String, Codable, CaseIterable, Identifiable {
         case .household: ["Room", "Instructions", "Season"] 
         case .packing: ["Quantity", "Category", "Essential"] 
         case .bills: ["Amount", "Currency", "Provider", "Payment Link", "Renewal Date", "Notice Date", "Cancellation Deadline", "Payment Confirmation"]
-        case .reading: ["Creator", "Format", "Source Link", "Rating", "Progress Detail", "Estimated Minutes", "Thumbnail URL"]
+        case .reading: ["Creator", "Format", "Source Link", "Year", "Genres", "Series Title", "Season", "Episode", "Runtime Minutes", "Rating", "Progress Detail", "Estimated Minutes", "Thumbnail URL", "Recommended By", "Watch With", "Why Saved"]
         case .errands: ["Destination", "Opening Hours", "Before Leaving", "Shopping List ID"]
         case .appointments: ["Contact", "Questions", "Preparation", "Follow-up Date", "Outcome"]
         case .routines: ["Section", "Step Order", "Instructions", "Timer Minutes", "Required"]
@@ -1434,7 +1441,7 @@ enum SpecializedListType: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .packing: ["Not Prepared", "Prepared", "Packed"]
         case .bills: ["Unpaid", "Paid", "Canceled"]
-        case .reading: ["Saved", "In Progress", "Finished"]
+        case .reading: ["Saved", "In Progress", "Caught Up", "Dropped", "Finished"]
         default: []
         }
     }

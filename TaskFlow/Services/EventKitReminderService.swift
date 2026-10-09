@@ -130,7 +130,7 @@ final class EventKitReminderService {
         event.calendar = eventCalendar(withID: draft.calendarID) ?? store.defaultCalendarForNewEvents
         if let calendar = event.calendar, !calendar.supportedEventAvailabilities.isEmpty { event.availability = ekAvailability(from: draft.availability) }
         event.timeZone = TimeZone(identifier: draft.timeZoneIdentifier)
-        if draft.eventID == nil || oldAlarm != draft.alarmOffsetMinutes { event.alarms = draft.alarmOffsetMinutes.map { [EKAlarm(relativeOffset: -TimeInterval($0 * 60))] } }
+        if draft.eventID == nil || oldAlarm != draft.alarmOffsetMinutes { event.alarms = draft.alarmOffsetMinutes.map { [EKAlarm(relativeOffset: -TimeInterval($0) * 60)] } }
         if draft.eventID == nil { event.recurrenceRules = draft.recurrence.map { [eventKitRule(from: $0)] } }
         return event
     }
@@ -319,7 +319,7 @@ final class EventKitReminderService {
         }
 
         if draft.eventID == nil || originalAlarmOffset != draft.alarmOffsetMinutes {
-            event.alarms = draft.alarmOffsetMinutes.map { [EKAlarm(relativeOffset: -TimeInterval($0 * 60))] }
+            event.alarms = draft.alarmOffsetMinutes.map { [EKAlarm(relativeOffset: -TimeInterval($0) * 60)] }
         }
 
         let originalRule = event.recurrenceRules?.first.map(recurrenceRule(from:))

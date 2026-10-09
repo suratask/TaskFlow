@@ -77,6 +77,11 @@ struct MetadataSnapshot: Codable, Equatable {
             let revised = key.hasPrefix("listProfiles/") ? "listProfiles/" + mapped(String(key.dropFirst("listProfiles/".count))) : key
             result.fieldUpdatedAt[revised] = max(result.fieldUpdatedAt[revised] ?? .distantPast, date)
         }
+        if let data = syncedSettings["TaskFlow.listOrder"],
+           let wrapper = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+           let order = wrapper["value"] as? [String] {
+            result.syncedSettings["TaskFlow.listOrder"] = try? PropertyListSerialization.data(fromPropertyList: ["value": order.map(mapped)], format: .xml, options: 0)
+        }
         if let data = syncedSettings["TaskFlow.listIcons"],
            let wrapper = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
            let icons = wrapper["value"] as? [String: String] {
