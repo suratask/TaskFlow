@@ -1,1 +1,4 @@
 .build/
+tmp/
+.DS_Store
+xcuserdata/
