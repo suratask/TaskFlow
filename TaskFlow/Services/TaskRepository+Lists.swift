@@ -372,7 +372,18 @@ extension TaskRepository {
     var visibleTodaySections: [TodayDashboardSection] {
         _ = todaySectionRevision
         let hidden = Set(preferences.stringArray(forKey: "TaskFlow.todayHiddenSections") ?? [TodayDashboardSection.timeline.rawValue])
-        return todaySectionOrder.filter { !hidden.contains($0.rawValue) }
+        return availableTodaySectionOrder.filter { !hidden.contains($0.rawValue) }
+    }
+    /// Today sections that can appear right now; the Calendar section waits until calendars are in use.
+    var availableTodaySectionOrder: [TodayDashboardSection] {
+        todaySectionOrder.filter(isTodaySectionAvailable)
+    }
+    func isTodaySectionAvailable(_ section: TodayDashboardSection) -> Bool {
+        section != .calendar || showsCalendarEvents
+    }
+    /// Without calendars the timeline holds only timed tasks, so it drops "Combined".
+    func todaySectionTitle(_ section: TodayDashboardSection) -> String {
+        section == .timeline && !showsCalendarEvents ? "Timeline" : section.title
     }
     func setTodaySectionVisible(_ section: TodayDashboardSection, _ visible: Bool) {
         var hidden = Set(preferences.stringArray(forKey: "TaskFlow.todayHiddenSections") ?? [TodayDashboardSection.timeline.rawValue])
@@ -383,8 +394,11 @@ extension TaskRepository {
     }
     func moveTodaySections(fromOffsets offsets: IndexSet, toOffset destination: Int) {
         selectionFeedbackSequence &+= 1
-        var order = todaySectionOrder
-        order.move(fromOffsets: offsets, toOffset: destination)
+        // The editor lists only available sections; unavailable ones keep their place in the saved order.
+        var shown = availableTodaySectionOrder
+        shown.move(fromOffsets: offsets, toOffset: destination)
+        var remaining = shown.makeIterator()
+        let order = todaySectionOrder.map { isTodaySectionAvailable($0) ? (remaining.next() ?? $0) : $0 }
         preferences.set(order.map(\.rawValue), forKey: "TaskFlow.todaySectionOrder")
         todaySectionRevision &+= 1
         scheduleCloudSync()
@@ -991,4 +1005,39 @@ extension TaskRepository {
     }
     /// Re-applies reminders after list options that affect them change.
     func refreshDeadlineReminders() async { await rescheduleNotifications() }
+
+    // MARK: Lists in TaskFlow
+
+    /// Lists the user hasn't turned off in Settings; empty when Reminders are off entirely.
+    var enabledReminderLists: [TaskList] {
+        usesReminders ? allReminderLists.filter { !disabledReminderListIDs.contains($0.id) } : []
+    }
+    /// The Tasks tab and sidebar lists show unless the user turned off Reminders or every list.
+    /// Before access is granted they stay, so the Tasks view can explain how to connect.
+    var showsTasksFeature: Bool {
+        usesReminders && (accessState != .granted || allReminderLists.isEmpty || !enabledReminderLists.isEmpty)
+    }
+    func isReminderListEnabled(_ id: String) -> Bool { !disabledReminderListIDs.contains(id) }
+    func setUsesReminders(_ enabled: Bool) {
+        usesReminders = enabled
+        Task { await applyReminderListAvailability() }
+    }
+    func setReminderList(_ list: TaskList, isEnabled: Bool) {
+        if isEnabled { disabledReminderListIDs.remove(list.id) } else { disabledReminderListIDs.insert(list.id) }
+        Task { await applyReminderListAvailability() }
+    }
+    /// Hides or restores turned-off lists everywhere: tasks, alerts, Spotlight and widgets.
+    private func applyReminderListAvailability() async {
+        guard accessState == .granted else { return }
+        lists = visibleLists()
+        if case .list(let id) = selectedScope, !lists.contains(where: { $0.id == id }) {
+            selectedTaskID = nil
+            selectedScope = .today
+        }
+        await refreshTasks()
+        TaskFlowSpotlightIndexer.update(tasks: tasks, lists: lists)
+        await rescheduleNotifications()
+        WidgetCenter.shared.reloadAllTimelines()
+        TaskFlowAppShortcuts.updateAppShortcutParameters()
+    }
 }

@@ -142,6 +142,26 @@ struct SettingsView: View {
                             Text("Display")
                         }
                         Section {
+                            Toggle("Use Reminders", isOn: Binding(
+                                get: { repository.usesReminders },
+                                set: { repository.setUsesReminders($0) }
+                            ))
+                            if repository.usesReminders {
+                                ForEach(repository.allReminderLists) { list in
+                                    Toggle(isOn: Binding(
+                                        get: { repository.isReminderListEnabled(list.id) },
+                                        set: { repository.setReminderList(list, isEnabled: $0) }
+                                    )) {
+                                        Label { Text(list.title) } icon: { Image(systemName: repository.listIcon(for: list.id)).foregroundStyle(list.color) }
+                                    }
+                                }
+                            }
+                        } header: {
+                            Text("Lists in TaskFlow")
+                        } footer: {
+                            Text("Turned-off lists and their reminders are hidden throughout TaskFlow, including alerts and widgets. They stay in the Reminders app. When every list is off, the Tasks tab is hidden.")
+                        }
+                        Section {
                             Picker("Default List", selection: $repository.defaultListID) {
                                 Text("First Available").tag("")
                                 ForEach(repository.lists) { list in
@@ -186,10 +206,14 @@ struct SettingsView: View {
                                     Label("Continue", systemImage: "calendar.badge.plus")
                                 }
                             } else if repository.eventAccessState == .granted {
-                                if repository.eventCalendars.isEmpty {
+                                Toggle("Use Calendars", isOn: Binding(
+                                    get: { repository.usesCalendars },
+                                    set: { repository.setUsesCalendars($0) }
+                                ))
+                                if repository.usesCalendars && repository.allEventCalendars.isEmpty {
                                     Text("No event calendars are available.")
                                         .foregroundStyle(.secondary)
-                                } else {
+                                } else if repository.usesCalendars {
                                     if !repository.writableEventCalendars.isEmpty {
                                         Picker("Default Calendar", selection: $repository.defaultEventCalendarID) {
                                             Text("First Writable").tag("")
@@ -199,10 +223,11 @@ struct SettingsView: View {
                                         }
                                     }
 
-                                    Button("Use my calendars") { Task { await repository.useMyCalendars() } }
-                                    DisclosureGroup("Customize") {
-                                    ForEach(repository.eventCalendars) { calendar in
-                                        Toggle(isOn: eventCalendarSelection(for: calendar)) {
+                                    if !repository.eventCalendars.isEmpty {
+                                        Button("Use my calendars") { Task { await repository.useMyCalendars() } }
+                                    }
+                                    ForEach(repository.allEventCalendars) { calendar in
+                                        Toggle(isOn: eventCalendarAvailability(for: calendar)) {
                                             HStack(spacing: 12) {
                                                 Circle()
                                                     .fill(calendar.color)
@@ -210,7 +235,6 @@ struct SettingsView: View {
                                                 Text(calendar.title)
                                             }
                                         }
-                                    }
                                     }
                                 }
                             } else {
@@ -221,7 +245,7 @@ struct SettingsView: View {
                         } header: {
                             Text("Event Calendars")
                         } footer: {
-                            Text("Selected calendars appear as events in the task calendar view. New events use the default calendar when one is set.")
+                            Text("Turned-off calendars and their events are hidden throughout TaskFlow, including availability, search and widgets. They stay in the Calendar app. Calendar is optional: the Calendar tab appears once access is granted and at least one calendar is on. New events use the default calendar when one is set.")
                         }
                         if repository.eventAccessState == .granted && !repository.eventCalendars.isEmpty {
                             Section {
@@ -379,11 +403,11 @@ struct SettingsView: View {
         }
     }
 
-    private func eventCalendarSelection(for calendar: EventCalendar) -> Binding<Bool> {
+    private func eventCalendarAvailability(for calendar: EventCalendar) -> Binding<Bool> {
         Binding {
-            repository.selectedEventCalendarIDs.contains(calendar.id)
-        } set: { isSelected in
-            repository.setEventCalendar(calendar, isSelected: isSelected)
+            repository.isEventCalendarEnabled(calendar.id)
+        } set: { isEnabled in
+            repository.setEventCalendar(calendar, isEnabled: isEnabled)
         }
     }
 

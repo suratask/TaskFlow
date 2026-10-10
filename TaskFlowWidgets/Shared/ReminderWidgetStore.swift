@@ -78,16 +78,19 @@ final class ReminderWidgetStore {
         } else { needsAccess = true }
         let status = EKEventStore.authorizationStatus(for: .event)
         let eventAuthorized = hasEventKitAccess(status)
-        if includeEvents && eventAuthorized {
+        // Calendar is optional: when it's off or not connected, the agenda is reminders-only and asks for nothing.
+        if includeEvents && eventAuthorized && TaskFlowSharedSettings.usesCalendars {
             let selectedIDs = Set(TaskFlowSharedSettings.defaults.stringArray(forKey: TaskFlowSharedSettings.selectedEventCalendarIDsKey) ?? [])
-            let allCalendars = store.calendars(for: .event)
+            // Calendars turned off in TaskFlow Settings never appear, even when the widget shows all calendars.
+            let disabledIDs = TaskFlowSharedSettings.disabledEventCalendarIDs
+            let allCalendars = TaskFlowSharedSettings.usesCalendars ? store.calendars(for: .event).filter { !disabledIDs.contains($0.calendarIdentifier) } : []
             let calendars = useAllCalendars || selectedIDs.isEmpty ? allCalendars : allCalendars.filter { selectedIDs.contains($0.calendarIdentifier) }
             let predicate = store.predicateForEvents(withStart: start, end: end, calendars: calendars)
-            items += store.events(matching: predicate).sorted { $0.startDate < $1.startDate }.prefix(eventLimit).map { event in
+            if !calendars.isEmpty { items += store.events(matching: predicate).sorted { $0.startDate < $1.startDate }.prefix(eventLimit).map { event in
                 .event(WidgetEvent(id: event.eventIdentifier ?? event.calendarItemIdentifier, title: event.title ?? "Untitled Event", calendarTitle: event.calendar.title, startDate: event.startDate, endDate: event.endDate, isAllDay: event.isAllDay, location: event.location, calendarColor: event.calendar.cgColor.map { Color(cgColor: $0) } ?? .blue))
-            }
+            } }
         }
-        return (items.sorted { $0.startDate == $1.startDate ? $0.id < $1.id : $0.startDate < $1.startDate }, (needsAccess || (includeEvents && !eventAuthorized)) && items.isEmpty)
+        return (items.sorted { $0.startDate == $1.startDate ? $0.id < $1.id : $0.startDate < $1.startDate }, needsAccess && items.isEmpty)
     }
 
     func loadHighPriorityTasks(limit: Int) async -> (tasks: [WidgetTask], accessNeeded: Bool) {
@@ -151,9 +154,13 @@ final class ReminderWidgetStore {
         try store.save(reminder, commit: true)
     }
 
+    /// Every widget reminder fetch goes through here, so lists turned off in TaskFlow Settings are left out.
     private func reminders(matching predicate: NSPredicate) async -> [EKReminder] {
-        await withCheckedContinuation { continuation in
+        guard TaskFlowSharedSettings.usesReminders else { return [] }
+        let disabledIDs = TaskFlowSharedSettings.disabledReminderListIDs
+        let fetched: [EKReminder] = await withCheckedContinuation { continuation in
             store.fetchReminders(matching: predicate) { continuation.resume(returning: $0 ?? []) }
         }
+        return disabledIDs.isEmpty ? fetched : fetched.filter { !disabledIDs.contains($0.calendar.calendarIdentifier) }
     }
 }

@@ -14,6 +14,23 @@ enum TaskFlowSharedSettings {
     static let selectedEventCalendarIDsKey = "TaskFlow.selectedEventCalendarIDs"
     /// Reminder list IDs chosen by the active Focus filter; empty means show every list.
     static let focusListIDsKey = "TaskFlow.focusListIDs"
+    /// Which reminder lists and event calendars the user turned off in TaskFlow, shared so widgets hide them too.
+    static let usesRemindersKey = "TaskFlow.usesReminders"
+    static let usesCalendarsKey = "TaskFlow.usesCalendars"
+    static let disabledReminderListIDsKey = "TaskFlow.disabledReminderListIDs"
+    static let disabledEventCalendarIDsKey = "TaskFlow.disabledEventCalendarIDs"
+
+    static var usesReminders: Bool { defaults.object(forKey: usesRemindersKey) as? Bool ?? true }
+    static var usesCalendars: Bool { defaults.object(forKey: usesCalendarsKey) as? Bool ?? true }
+    static var disabledReminderListIDs: Set<String> { Set(defaults.stringArray(forKey: disabledReminderListIDsKey) ?? []) }
+    static var disabledEventCalendarIDs: Set<String> { Set(defaults.stringArray(forKey: disabledEventCalendarIDsKey) ?? []) }
+
+    /// Reminder lists turned on in TaskFlow Settings; widget pickers and Shortcuts offer only these.
+    static func availableReminderLists(in store: EKEventStore) -> [EKCalendar] {
+        guard usesReminders else { return [] }
+        let disabled = disabledReminderListIDs
+        return store.calendars(for: .reminder).filter { !disabled.contains($0.calendarIdentifier) }
+    }
     static let appGroupID = "group.com.surratt.TaskFlow"
     static let widgetMetadataFileName = "WidgetMetadata.json"
     static let widgetSmartListsFileName = "WidgetSmartLists.json"

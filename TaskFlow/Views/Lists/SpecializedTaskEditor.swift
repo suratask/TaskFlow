@@ -114,10 +114,12 @@ struct SpecializedTaskEditor: View {
                     }
                 }
                 if type == .appointments {
-                    NavigationLink {
-                        EventLinkPicker(repository: repository, selection: field("Event ID"))
-                    } label: {
-                        LabeledContent("Linked Event", value: repository.calendarEvents.first { $0.id == details.fields["Event ID"] }?.title ?? "Choose Event")
+                    if repository.showsCalendarEvents {
+                        NavigationLink {
+                            EventLinkPicker(repository: repository, selection: field("Event ID"))
+                        } label: {
+                            LabeledContent("Linked Event", value: repository.calendarEvents.first { $0.id == details.fields["Event ID"] }?.title ?? "Choose Event")
+                        }
                     }
                     Toggle("Follow-up Reminder", isOn: Binding(get: { !(details.fields["Follow-up Date"] ?? "").isEmpty }, set: { details.fields["Follow-up Date"] = $0 ? SpecializedTaskDetails.dateText(Date()) : "" }))
                     if !(details.fields["Follow-up Date"] ?? "").isEmpty {

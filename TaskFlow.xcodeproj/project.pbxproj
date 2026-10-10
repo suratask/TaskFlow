@@ -76,7 +76,7 @@
 		DD10A98FC46BD2A98FACD153 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7F331F12244E96ED1AEA1DF1 /* Foundation.framework */; };
 		DFC29528C498CA94D23087FF /* TaskFlowDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E48D7AD6B2C2376340A2ED /* TaskFlowDesignSystem.swift */; };
 		E56F70FEA84522BA9A78E8B0 /* TaskRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BCF9799CD8DC4ED42F3D2BC /* TaskRepository.swift */; };
-		E71000000000000000000001 /* CloudNotesSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E71000000000000000000002 /* CloudNotesSyncService.swift */; };
+		E71000000000000000000001 /* Services/CloudNotesSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E71000000000000000000002 /* Services/CloudNotesSyncService.swift */; };
 		E7844E1A585D76FC3463C776 /* TaskCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D2DB6E99B573A68C473335 /* TaskCollectionView.swift */; };
 		E89C3ED341A87C31D44A44D7 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9F79791C4AF949F91E90E0 /* SettingsView.swift */; };
 		E8C3C3E287AE3484EBCA2F29 /* CalendarPlanningViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C2D07C8A90597553A3D7428 /* CalendarPlanningViews.swift */; };
@@ -204,7 +204,7 @@
 		DE465B6BCA6647C1883285B2 /* ListTypeExperience.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ListTypeExperience.swift; path = TaskFlow/Views/ListTypeExperience.swift; sourceTree = "<group>"; };
 		E16527A2293B34164772D4CB /* TaskRepository+Sync.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = "TaskRepository+Sync.swift"; path = "Services/TaskRepository+Sync.swift"; sourceTree = "<group>"; };
 		E4207A810815D2DD9930E639 /* TaskDetailView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskDetailView.swift; path = Views/TaskDetailView.swift; sourceTree = "<group>"; };
-		E71000000000000000000002 /* CloudNotesSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/CloudNotesSyncService.swift; sourceTree = "<group>"; };
+		E71000000000000000000002 /* Services/CloudNotesSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/CloudNotesSyncService.swift; sourceTree = "<group>"; };
 		E83E9F5B93B8478DB3F66095 /* DueTodayLiveActivityCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DueTodayLiveActivityCoordinator.swift; path = Services/DueTodayLiveActivityCoordinator.swift; sourceTree = "<group>"; };
 		E8A26A690368CC9D1253B325 /* NoteDetailView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteDetailView.swift; path = Views/Notes/NoteDetailView.swift; sourceTree = "<group>"; };
 		E8AF3909FD7847EFA1F2F13B /* TaskFlow.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = TaskFlow.entitlements; sourceTree = "<group>"; };
@@ -263,7 +263,6 @@
 			children = (
 				138BDA123D91AD87FE16BA6A /* TaskFlowUITests.swift */,
 			);
-			name = TaskFlowUITests;
 			path = TaskFlowUITests;
 			sourceTree = "<group>";
 		};
@@ -309,7 +308,7 @@
 				DC4EB8934893B8F19187B881 /* EventKitReminderService.swift */,
 				03B39AE0B28AEDAA36363BEC /* MetadataStore.swift */,
 				458582641789438F86507D16 /* CloudMetadataSyncService.swift */,
-				E71000000000000000000002 /* CloudNotesSyncService.swift */,
+				E71000000000000000000002 /* Services/CloudNotesSyncService.swift */,
 				A8A0EC4D2153F8B95D6E67CB /* NotificationScheduler.swift */,
 				88BE01236C304755995417BB /* NotificationTapRouter.swift */,
 				E83E9F5B93B8478DB3F66095 /* DueTodayLiveActivityCoordinator.swift */,
@@ -677,7 +676,7 @@
 				2F96966919DA675621AA2BFE /* EventKitReminderService.swift in Sources */,
 				777EBB703E4295030C6EBBE3 /* MetadataStore.swift in Sources */,
 				3487723A0C2E42C4A7920D6C /* CloudMetadataSyncService.swift in Sources */,
-				E71000000000000000000001 /* CloudNotesSyncService.swift in Sources */,
+				E71000000000000000000001 /* Services/CloudNotesSyncService.swift in Sources */,
 				5D8E317ED37BE72E8328CE98 /* NotificationScheduler.swift in Sources */,
 				8F2EB5C2085F432FA8371066 /* NotificationTapRouter.swift in Sources */,
 				D3B7850F631F4C22AE3D66E1 /* DueTodayLiveActivityCoordinator.swift in Sources */,
@@ -783,7 +782,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlowWidgets/TaskFlowWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowWidgets/Resources/Info.plist;
@@ -871,7 +870,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlow/TaskFlow.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlow/Resources/Info.plist;
@@ -903,7 +902,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlowWidgets/TaskFlowWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowWidgets/Resources/Info.plist;
@@ -1031,7 +1030,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = TaskFlowShareExtension/TaskFlowShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowShareExtension/Info.plist;
@@ -1052,7 +1051,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = TaskFlowShareExtension/TaskFlowShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowShareExtension/Info.plist;
@@ -1076,7 +1075,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlow/TaskFlowDevelopment.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlow/Resources/Info.plist;

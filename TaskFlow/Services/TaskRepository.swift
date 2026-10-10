@@ -237,6 +237,24 @@ final class TaskRepository {
             scheduleCloudSync()
         }
     }
+    /// Lists and calendars the user turned off for TaskFlow. Kept on this device (identifiers differ
+    /// between devices) and in the app group so widgets hide the same items.
+    var usesReminders = true {
+        didSet { TaskFlowSharedSettings.defaults.set(usesReminders, forKey: TaskFlowSharedSettings.usesRemindersKey) }
+    }
+    var usesCalendars = true {
+        didSet { TaskFlowSharedSettings.defaults.set(usesCalendars, forKey: TaskFlowSharedSettings.usesCalendarsKey) }
+    }
+    var disabledReminderListIDs: Set<String> = [] {
+        didSet { TaskFlowSharedSettings.defaults.set(disabledReminderListIDs.sorted(), forKey: TaskFlowSharedSettings.disabledReminderListIDsKey) }
+    }
+    var disabledEventCalendarIDs: Set<String> = [] {
+        didSet { TaskFlowSharedSettings.defaults.set(disabledEventCalendarIDs.sorted(), forKey: TaskFlowSharedSettings.disabledEventCalendarIDsKey) }
+    }
+    /// Every reminder list and event calendar on the device, including turned-off ones; `lists` and
+    /// `eventCalendars` hold only the ones in use.
+    var allReminderLists: [TaskList] = []
+    var allEventCalendars: [EventCalendar] = []
     var calendarEvents: [CalendarEvent] = []
     var eventCalendars: [EventCalendar] = []
     var selectedTaskID: String?
@@ -389,6 +407,10 @@ final class TaskRepository {
         notificationsEnabled = preferences.object(forKey: "TaskFlow.notificationsEnabled") as? Bool ?? true
         showsDueTodayLiveActivity = preferences.bool(forKey: "TaskFlow.showsDueTodayLiveActivity")
         selectedEventCalendarIDs = Set(preferences.stringArray(forKey: TaskFlowSharedSettings.selectedEventCalendarIDsKey) ?? [])
+        usesReminders = TaskFlowSharedSettings.usesReminders
+        usesCalendars = TaskFlowSharedSettings.usesCalendars
+        disabledReminderListIDs = TaskFlowSharedSettings.disabledReminderListIDs
+        disabledEventCalendarIDs = TaskFlowSharedSettings.disabledEventCalendarIDs
     }
     var taskFilterRevision = 0
     @ObservationIgnored var taskFilterCacheKey: [String] = []

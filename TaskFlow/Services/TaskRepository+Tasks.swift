@@ -113,8 +113,10 @@ extension TaskRepository {
         }
         return task.status == .blocked || task.status == .waiting ? "Waiting On: Not specified" : nil
     }
+    /// Reloads every reminder list, then returns the ones turned on in TaskFlow, narrowed by any Focus filter.
     func visibleLists() -> [TaskList] {
-        let all = Self.orderedLists(reminderService.loadLists(), order: preferences.stringArray(forKey: "TaskFlow.listOrder") ?? [])
+        allReminderLists = Self.orderedLists(reminderService.loadLists(), order: preferences.stringArray(forKey: "TaskFlow.listOrder") ?? [])
+        let all = enabledReminderLists
         let allowed = focusListIDs
         guard !allowed.isEmpty else { return all }
         let filtered = all.filter { allowed.contains($0.id) }
@@ -150,7 +152,9 @@ extension TaskRepository {
         if tasks != loaded { tasks = loaded }
     }
     func loadVisibleTasks() async -> [TaskItem] {
-        let all = await reminderService.loadTasks(metadataStore: metadataStore)
+        guard usesReminders else { return [] }
+        let disabled = disabledReminderListIDs
+        let all = await reminderService.loadTasks(metadataStore: metadataStore).filter { !disabled.contains($0.listID) }
         let allowed = focusListIDs
         guard !allowed.isEmpty, all.contains(where: { allowed.contains($0.listID) }) else { return all }
         return all.filter { allowed.contains($0.listID) }
@@ -783,13 +787,14 @@ extension TaskRepository {
             Task { await refreshWatchShowsIfNeeded() }
             if let id = pendingOpenTaskID { openTask(id: id) }
         } else {
+            allReminderLists = []
             lists = []
             tasks = []
         }
         if accessState == .granted {
             TaskFlowSpotlightIndexer.update(tasks: tasks, lists: lists)
         }
-        eventCalendars = eventAccessState == .granted ? reminderService.loadEventCalendars() : []
+        reloadEventCalendars()
         await refreshCalendarEvents()
         await rescheduleNotifications()
     }

@@ -30,17 +30,21 @@ struct QuickCaptureView: View {
         self.onEvent = onEvent
         _input = State(initialValue: initialText)
         _parsedTitle = State(initialValue: initialText)
-        _captureKind = State(initialValue: initialKind)
+        // A shared "Event" capture falls back to a task when calendars aren't in use.
+        _captureKind = State(initialValue: repository.canCreateEvents ? initialKind : "Task")
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Capture") {
-                    Picker("Create", selection: $captureKind) {
-                        Text("Task").tag("Task")
-                        Text("Event").tag("Event")
-                    }.pickerStyle(.segmented)
+                    // Events are optional: without calendars in use, Quick Capture only makes tasks.
+                    if repository.canCreateEvents {
+                        Picker("Create", selection: $captureKind) {
+                            Text("Task").tag("Task")
+                            Text("Event").tag("Event")
+                        }.pickerStyle(.segmented)
+                    }
                     TextField("Describe it: Call the dentist Friday at 9", text: $input, axis: .vertical)
                         .lineLimit(2...5)
                         .textInputAutocapitalization(.sentences)

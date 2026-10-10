@@ -405,6 +405,15 @@ struct ContentView: View {
     }
 
     private func openCalendarView() {
+        // Widgets link to the calendar; with Calendar turned off in Settings, land on Today instead.
+        guard repository.showsCalendarFeature else {
+            compactTab = .today
+            selectedCalendarEvent = nil
+            repository.selectedTaskID = nil
+            repository.selectedScope = .today
+            preferredCompactColumn = .content
+            return
+        }
         compactTab = .calendar
         selectedCalendarEvent = nil
         repository.selectedScope = .inbox
@@ -642,10 +651,19 @@ private struct CompactNavigationView: View {
     @Binding var selectedCalendarEvent: CalendarEvent?
 
     var body: some View {
-        if #available(iOS 18.0, *) {
-            modernTabs
-        } else {
-            legacyTabs
+        Group {
+            if #available(iOS 18.0, *) {
+                modernTabs
+            } else {
+                legacyTabs
+            }
+        }
+        // Leave a tab that was just hidden in Settings (every list or calendar turned off).
+        .onChange(of: repository.showsTasksFeature, initial: true) { _, shows in
+            if !shows && selectedTab == .tasks { selectedTab = .today }
+        }
+        .onChange(of: repository.showsCalendarFeature, initial: true) { _, shows in
+            if !shows && selectedTab == .calendar { selectedTab = .today }
         }
     }
 
@@ -656,11 +674,15 @@ private struct CompactNavigationView: View {
             Tab(CompactNavigationTab.today.title, systemImage: CompactNavigationTab.today.icon, value: CompactNavigationTab.today) {
                 todayTab
             }
-            Tab(CompactNavigationTab.tasks.title, systemImage: CompactNavigationTab.tasks.icon, value: CompactNavigationTab.tasks) {
-                tasksTab
+            if repository.showsTasksFeature {
+                Tab(CompactNavigationTab.tasks.title, systemImage: CompactNavigationTab.tasks.icon, value: CompactNavigationTab.tasks) {
+                    tasksTab
+                }
             }
-            Tab(CompactNavigationTab.calendar.title, systemImage: CompactNavigationTab.calendar.icon, value: CompactNavigationTab.calendar) {
-                calendarTab
+            if repository.showsCalendarFeature {
+                Tab(CompactNavigationTab.calendar.title, systemImage: CompactNavigationTab.calendar.icon, value: CompactNavigationTab.calendar) {
+                    calendarTab
+                }
             }
             Tab(CompactNavigationTab.notes.title, systemImage: CompactNavigationTab.notes.icon, value: CompactNavigationTab.notes) {
                 notesTab
@@ -677,12 +699,16 @@ private struct CompactNavigationView: View {
             todayTab
                 .tabItem { Label(CompactNavigationTab.today.title, systemImage: CompactNavigationTab.today.icon) }
                 .tag(CompactNavigationTab.today)
-            tasksTab
-                .tabItem { Label(CompactNavigationTab.tasks.title, systemImage: CompactNavigationTab.tasks.icon) }
-                .tag(CompactNavigationTab.tasks)
-            calendarTab
-                .tabItem { Label(CompactNavigationTab.calendar.title, systemImage: CompactNavigationTab.calendar.icon) }
-                .tag(CompactNavigationTab.calendar)
+            if repository.showsTasksFeature {
+                tasksTab
+                    .tabItem { Label(CompactNavigationTab.tasks.title, systemImage: CompactNavigationTab.tasks.icon) }
+                    .tag(CompactNavigationTab.tasks)
+            }
+            if repository.showsCalendarFeature {
+                calendarTab
+                    .tabItem { Label(CompactNavigationTab.calendar.title, systemImage: CompactNavigationTab.calendar.icon) }
+                    .tag(CompactNavigationTab.calendar)
+            }
             notesTab
                 .tabItem { Label(CompactNavigationTab.notes.title, systemImage: CompactNavigationTab.notes.icon) }
                 .tag(CompactNavigationTab.notes)
@@ -784,9 +810,11 @@ private struct SidebarView: View {
                 scopeRow(.inbox, title: "Open", icon: "tray.full", color: .blue)
                 scopeRow(.today, title: "Today", icon: "calendar", color: .teal)
                 scopeRow(.next7Days, title: "Upcoming", icon: "calendar.badge.clock", color: .cyan)
-                Label { Text("Calendar") } icon: { Image(systemName: "calendar").foregroundStyle(.indigo) }
-                    .badge(repository.filteredCalendarEvents.count)
-                    .tag(SidebarItem.calendar)
+                if repository.showsCalendarFeature {
+                    Label { Text("Calendar") } icon: { Image(systemName: "calendar").foregroundStyle(.indigo) }
+                        .badge(repository.filteredCalendarEvents.count)
+                        .tag(SidebarItem.calendar)
+                }
                 scopeRow(.flagged, title: "Flagged", icon: "flag", color: .orange)
                 scopeRow(.completed, title: "Completed", icon: "checkmark.circle", color: .green)
                 scopeRow(.notes, title: "Notes", icon: "note.text", color: .purple)
@@ -806,15 +834,17 @@ private struct SidebarView: View {
                 }
             }
 
-            Section("Lists") {
-                ForEach(repository.unpinnedLists) { list in
-                    listRow(list, isPinned: false)
-                }
+            if repository.showsTasksFeature {
+                Section("Lists") {
+                    ForEach(repository.unpinnedLists) { list in
+                        listRow(list, isPinned: false)
+                    }
 
-                TextField("New List", text: $newListName)
-                    .textInputAutocapitalization(.words)
-                    .submitLabel(.done)
-                    .onSubmit(createList)
+                    TextField("New List", text: $newListName)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.done)
+                        .onSubmit(createList)
+                }
             }
 
             Section("Smart Lists") {
@@ -866,7 +896,7 @@ private struct SidebarView: View {
             }
         }
         .overlay {
-            if repository.accessState != .granted {
+            if repository.accessState != .granted && repository.usesReminders {
                 AccessOverlay(repository: repository)
             }
         }

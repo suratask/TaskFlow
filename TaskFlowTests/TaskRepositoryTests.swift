@@ -2336,7 +2336,47 @@ final class TaskRepositoryTests: XCTestCase {
         XCTAssertEqual(relaunched.todaySectionOrder.first, .tasks)
         XCTAssertFalse(relaunched.visibleTodaySections.contains(.tomorrow))
         relaunched.resetTodaySections()
-        XCTAssertEqual(relaunched.visibleTodaySections, TodayDashboardSection.allCases.filter { $0 != .timeline })
+        // No calendars are in use here, so the Calendar section stays out of Today.
+        XCTAssertEqual(relaunched.visibleTodaySections, TodayDashboardSection.allCases.filter { $0 != .timeline && $0 != .calendar })
+    }
+
+    func testTodayHidesCalendarSectionWithoutCalendarsAndKeepsItsPlaceWhenReordering() {
+        let (repository, _, preferences) = fixture()
+        preferences.set(["summary", "calendar", "tasks", "focus"], forKey: "TaskFlow.todaySectionOrder")
+        XCTAssertFalse(repository.showsCalendarEvents)
+        XCTAssertFalse(repository.availableTodaySectionOrder.contains(.calendar))
+        XCTAssertEqual(repository.todaySectionTitle(.timeline), "Timeline")
+        // Moving "focus" to the top of the editor's list leaves the hidden Calendar section where it was.
+        let focusIndex = repository.availableTodaySectionOrder.firstIndex(of: .focus)!
+        repository.moveTodaySections(fromOffsets: IndexSet(integer: focusIndex), toOffset: 0)
+        XCTAssertEqual(Array(repository.todaySectionOrder.prefix(4)), [.focus, .calendar, .summary, .tasks])
+    }
+
+    func testTurnedOffListsAndCalendarsHideFromRepository() {
+        let (repository, _, _) = fixture()
+        let work = TaskList(id: "work", title: "Work", color: .blue)
+        let home = TaskList(id: "home", title: "Home", color: .green)
+        repository.allReminderLists = [work, home]
+        repository.disabledReminderListIDs = ["home"]
+        XCTAssertEqual(repository.enabledReminderLists.map(\.id), ["work"])
+        repository.usesReminders = false
+        XCTAssertTrue(repository.enabledReminderLists.isEmpty)
+        XCTAssertFalse(repository.showsTasksFeature)
+        repository.usesReminders = true
+        repository.disabledReminderListIDs = ["work", "home"]
+        repository.accessState = .granted
+        XCTAssertFalse(repository.showsTasksFeature)
+
+        repository.selectedEventCalendarIDs = ["a", "b"]
+        repository.disabledEventCalendarIDs = ["b"]
+        XCTAssertEqual(repository.shownEventCalendarIDs, ["a"])
+        repository.usesCalendars = false
+        XCTAssertTrue(repository.shownEventCalendarIDs.isEmpty)
+        XCTAssertFalse(repository.showsCalendarFeature)
+        XCTAssertFalse(repository.showsCalendarEvents)
+        repository.usesCalendars = true
+        repository.disabledReminderListIDs = []
+        repository.disabledEventCalendarIDs = []
     }
 
     func testTodaySuggestionsExcludeUnfinishedOrUnknownDependencies() {

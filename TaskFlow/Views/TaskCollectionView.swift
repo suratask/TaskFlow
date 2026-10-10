@@ -54,8 +54,10 @@ struct TaskCollectionView: View {
                 .navigationTitle(title)
                 .searchable(text: effectiveViewMode == .calendar ? $calendarSearch : $repository.searchQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search or type #tag")
                 .searchScopes($searchScope, activation: .onSearchPresentation) {
-                    ForEach(TaskSearchScope.allCases) { Text($0.rawValue).tag($0) }
+                    // Task-only search needs no All/Tasks/Events scopes when calendars aren't in use.
+                    ForEach(repository.showsCalendarEvents ? TaskSearchScope.allCases : []) { Text($0.rawValue).tag($0) }
                 }
+                .onChange(of: repository.showsCalendarEvents) { _, shows in if !shows { searchScope = .all } }
                 .searchSuggestions {
                     if effectiveViewMode != .calendar {
                         ForEach(tagSuggestions, id: \.self) { tag in
@@ -110,7 +112,9 @@ struct TaskCollectionView: View {
 
                         Menu {
                             Button("New Task", systemImage: "checklist") { editorDraft = repository.makeDraft() }
-                            Button("New Event", systemImage: "calendar.badge.plus") { eventDraft = repository.makeEventDraft() }
+                            if repository.canCreateEvents {
+                                Button("New Event", systemImage: "calendar.badge.plus") { eventDraft = repository.makeEventDraft() }
+                            }
                             Button("Quick Capture", systemImage: "text.cursor") { showsQuickCapture = true }
                         } label: {
                             Image(systemName: "plus")

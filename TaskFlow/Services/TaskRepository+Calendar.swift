@@ -150,8 +150,11 @@ extension TaskRepository {
         reminderService.availabilityOptions(calendarID: calendarID)
     }
     func conflictCheckEvents(from start: Date, to end: Date) -> [CalendarEvent] {
-        guard eventAccessState == .granted, end > start else { return [] }
-        return reminderService.loadEvents(from: start, to: end, calendarIDs: Set(reminderService.loadEventCalendars().map(\.id)).subtracting(excludedAvailabilityCalendarIDs))
+        guard eventAccessState == .granted, usesCalendars, end > start else { return [] }
+        let calendarIDs = Set(reminderService.loadEventCalendars().map(\.id))
+            .subtracting(excludedAvailabilityCalendarIDs)
+            .subtracting(disabledEventCalendarIDs)
+        return reminderService.loadEvents(from: start, to: end, calendarIDs: calendarIDs)
     }
     func eventConflicts(for draft: EventDraft, originalStart: Date? = nil) -> [CalendarEvent] {
         guard calendarAffectsAvailability(draft.calendarID) else { return [] }
@@ -202,7 +205,7 @@ extension TaskRepository {
     func requestEventCalendarAccess() async {
         _ = await reminderService.requestEventAccess()
         updateCalendarAccessState()
-        eventCalendars = eventAccessState == .granted ? reminderService.loadEventCalendars() : []
+        reloadEventCalendars()
         await refreshCalendarEvents()
     }
     func updateCalendarAccessState() {
@@ -221,11 +224,59 @@ extension TaskRepository {
         }
         Task { await refreshCalendarEvents() }
     }
+
+    // MARK: Calendars in TaskFlow
+
+    /// Calendars the user hasn't turned off in Settings; empty when Calendars are off entirely.
+    var enabledEventCalendars: [EventCalendar] {
+        usesCalendars ? allEventCalendars.filter { !disabledEventCalendarIDs.contains($0.id) } : []
+    }
+    /// Calendars whose events load: chosen in the calendar view's filter and turned on in Settings.
+    var shownEventCalendarIDs: Set<String> {
+        usesCalendars ? selectedEventCalendarIDs.subtracting(disabledEventCalendarIDs) : []
+    }
+    /// The Calendar tab and sidebar row appear only once calendars are in use: access granted, Calendars on,
+    /// and at least one calendar on. Connecting Calendar happens in Settings › Calendar or during setup.
+    var showsCalendarFeature: Bool { showsCalendarEvents }
+    /// Calendar is optional: event features (tiles, timelines, New Event, linking) appear only while this is true,
+    /// and views stay task-only otherwise instead of asking for access. Settings and the Calendar tab offer access.
+    var showsCalendarEvents: Bool {
+        usesCalendars && eventAccessState == .granted && !eventCalendars.isEmpty
+    }
+    /// New events need a calendar that is turned on and accepts changes.
+    var canCreateEvents: Bool { showsCalendarEvents && !writableEventCalendars.isEmpty }
+    func isEventCalendarEnabled(_ id: String) -> Bool { !disabledEventCalendarIDs.contains(id) }
+    func reloadEventCalendars() {
+        allEventCalendars = eventAccessState == .granted ? reminderService.loadEventCalendars() : []
+        eventCalendars = enabledEventCalendars
+    }
+    func setUsesCalendars(_ enabled: Bool) {
+        usesCalendars = enabled
+        // Turning Calendars back on with nothing chosen in the calendar filter would still show no events.
+        if enabled && shownEventCalendarIDs.isEmpty { selectedEventCalendarIDs.formUnion(enabledEventCalendars.map(\.id)) }
+        applyEventCalendarAvailability()
+    }
+    func setEventCalendar(_ calendar: EventCalendar, isEnabled: Bool) {
+        if isEnabled {
+            disabledEventCalendarIDs.remove(calendar.id)
+            selectedEventCalendarIDs.insert(calendar.id)
+        } else {
+            disabledEventCalendarIDs.insert(calendar.id)
+        }
+        applyEventCalendarAvailability()
+    }
+    private func applyEventCalendarAvailability() {
+        eventCalendars = enabledEventCalendars
+        if !showsCalendarFeature && taskViewMode == .calendar { taskViewMode = .list }
+        WidgetCenter.shared.reloadAllTimelines()
+        Task { await refreshCalendarEvents() }
+    }
     func refreshCalendarEvents(invalidateCache: Bool = true) async {
         let interval = TaskFlowPerformance.begin("Calendar fetch")
         defer { TaskFlowPerformance.end("Calendar fetch", interval) }
         if invalidateCache { calendarEventCache.removeAll(); calendarCacheOrder.removeAll() }
-        guard reminderService.eventAuthorizationState == .granted, !selectedEventCalendarIDs.isEmpty else {
+        let shownCalendarIDs = shownEventCalendarIDs
+        guard reminderService.eventAuthorizationState == .granted, !shownCalendarIDs.isEmpty else {
             calendarEvents = []
             return
         }
@@ -241,10 +292,10 @@ extension TaskRepository {
             var start = cal.dateInterval(of: .month, for: range.start)?.start ?? range.start
             while start < range.end {
                 guard let end = cal.date(byAdding: .month, value: 1, to: start), end > start else { break }
-                let key = CalendarFetchKey(start: start, end: end, calendars: selectedEventCalendarIDs)
+                let key = CalendarFetchKey(start: start, end: end, calendars: shownCalendarIDs)
                 if let cached = calendarEventCache[key] { result += cached }
                 else {
-                    let events = reminderService.loadEvents(from: start, to: end, calendarIDs: selectedEventCalendarIDs)
+                    let events = reminderService.loadEvents(from: start, to: end, calendarIDs: shownCalendarIDs)
                     calendarEventCache[key] = events
                     calendarCacheOrder.append(key)
                     result += events

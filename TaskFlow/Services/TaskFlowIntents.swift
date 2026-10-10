@@ -109,7 +109,8 @@ private final class TaskFlowIntentDataStore {
         guard let reminders else {
             throw NSError(domain: "TaskFlow.Shortcuts", code: 8, userInfo: [NSLocalizedDescriptionKey: "Reminders could not be loaded. Please try again."])
         }
-        return reminders.map(entity).sorted {
+        let listIDs = availableListIDs
+        return reminders.filter { listIDs.contains($0.calendar.calendarIdentifier) }.map(entity).sorted {
             if $0.isCompleted != $1.isCompleted { return !$0.isCompleted }
             switch ($0.dueDate, $1.dueDate) {
             case let (first?, second?) where first != second: return first < second
@@ -142,7 +143,7 @@ private final class TaskFlowIntentDataStore {
 
     func lists() async throws -> [TaskFlowListEntity] {
         try await ensureAccess()
-        return store.calendars(for: .reminder).map {
+        return availableLists.map {
             TaskFlowListEntity(id: $0.calendarIdentifier, title: $0.title)
         }.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
@@ -152,14 +153,18 @@ private final class TaskFlowIntentDataStore {
         let reminder = EKReminder(eventStore: store)
         let list: EKCalendar?
         if let listID {
-            list = store.calendars(for: .reminder).first { $0.calendarIdentifier == listID }
-            guard list?.allowsContentModifications == true else { throw writableListError }
+            guard let match = availableLists.first(where: { $0.calendarIdentifier == listID }) else { throw missingListError }
+            guard match.allowsContentModifications else { throw writableListError }
+            list = match
         } else {
+            // Fall back from TaskFlow's default list to the system default, then any list still turned on.
+            let writable = availableLists.filter(\.allowsContentModifications)
+            guard !writable.isEmpty else { throw noListsError }
             let preferredID = UserDefaults.standard.string(forKey: "TaskFlow.defaultListID")
-            let preferredList = store.calendars(for: .reminder).first {
-                $0.calendarIdentifier == preferredID && $0.allowsContentModifications
-            }
-            list = preferredList ?? store.defaultCalendarForNewReminders()
+            let systemDefaultID = store.defaultCalendarForNewReminders()?.calendarIdentifier
+            list = writable.first { $0.calendarIdentifier == preferredID }
+                ?? writable.first { $0.calendarIdentifier == systemDefaultID }
+                ?? writable.first
         }
         guard let list, list.allowsContentModifications else { throw writableListError }
         reminder.calendar = list
@@ -210,7 +215,7 @@ private final class TaskFlowIntentDataStore {
     func move(id: String, listID: String) async throws -> TaskFlowReminderEntity {
         try await ensureAccess()
         let reminder = try editableReminder(id: id)
-        guard let list = store.calendars(for: .reminder).first(where: { $0.calendarIdentifier == listID }) else { throw missingListError }
+        guard let list = availableLists.first(where: { $0.calendarIdentifier == listID }) else { throw missingListError }
         guard list.allowsContentModifications else { throw writableListError }
         reminder.calendar = list
         return try save(reminder)
@@ -237,13 +242,14 @@ private final class TaskFlowIntentDataStore {
 
     func openTask(id: String) async throws {
         try await ensureAccess()
-        guard store.calendarItem(withIdentifier: id) is EKReminder else { throw missingReminderError }
+        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder,
+              availableListIDs.contains(reminder.calendar.calendarIdentifier) else { throw missingReminderError }
         TaskFlowIntentRoute.open(url: TaskFlowDeepLink.taskURL(id))
     }
 
     func openList(id: String) async throws {
         try await ensureAccess()
-        guard store.calendars(for: .reminder).contains(where: { $0.calendarIdentifier == id }) else { throw missingListError }
+        guard availableListIDs.contains(id) else { throw missingListError }
         TaskFlowIntentRoute.open(url: TaskFlowDeepLink.listURL(id))
     }
 
@@ -253,7 +259,8 @@ private final class TaskFlowIntentDataStore {
 
     private func editableReminder(id: String) throws -> EKReminder {
         guard hasFullAccess else { throw accessError }
-        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { throw missingReminderError }
+        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder,
+              availableListIDs.contains(reminder.calendar.calendarIdentifier) else { throw missingReminderError }
         guard reminder.calendar.allowsContentModifications else { throw writableListError }
         return reminder
     }
@@ -263,6 +270,10 @@ private final class TaskFlowIntentDataStore {
     private var missingReminderError: NSError { NSError(domain: "TaskFlow.Shortcuts", code: 3, userInfo: [NSLocalizedDescriptionKey: "That reminder is no longer available. Refresh the shortcut and try again."]) }
     private var missingListError: NSError { NSError(domain: "TaskFlow.Shortcuts", code: 4, userInfo: [NSLocalizedDescriptionKey: "That reminder list is no longer available."]) }
     private var emptyTitleError: NSError { NSError(domain: "TaskFlow.Shortcuts", code: 5, userInfo: [NSLocalizedDescriptionKey: "Enter a reminder title."]) }
+    private var noListsError: NSError { NSError(domain: "TaskFlow.Shortcuts", code: 9, userInfo: [NSLocalizedDescriptionKey: "No editable reminder lists are turned on in TaskFlow Settings."]) }
+    /// Lists turned off in TaskFlow Settings are hidden from Shortcuts, like everywhere else in the app.
+    private var availableLists: [EKCalendar] { TaskFlowSharedSettings.availableReminderLists(in: store) }
+    private var availableListIDs: Set<String> { Set(availableLists.map(\.calendarIdentifier)) }
     private var invalidPriorityError: NSError { NSError(domain: "TaskFlow.Shortcuts", code: 6, userInfo: [NSLocalizedDescriptionKey: "Priority must be a number from 0 through 9."]) }
 }
 

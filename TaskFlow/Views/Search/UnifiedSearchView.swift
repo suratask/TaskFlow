@@ -39,7 +39,7 @@ struct UnifiedSearchView: View {
             matches(([task.title, task.notes, task.tags.joined(separator: " "), listTitles[task.listID] ?? ""] + Array(repository.specializedDetails(task).fields.values)).joined(separator: " "))
         } : []
         let calendarTitles = Dictionary(repository.eventCalendars.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
-        let matchingEvents = (scope == .all || scope == .events) ? repository.calendarEvents.filter {
+        let matchingEvents = repository.showsCalendarEvents && (scope == .all || scope == .events) ? repository.calendarEvents.filter {
             matches([$0.title, $0.location ?? "", $0.notes ?? "", calendarTitles[$0.calendarID] ?? "", $0.tags.joined(separator: " ")].joined(separator: " "))
         } : []
         let matchingNotes = (scope == .all || scope == .notes) ? repository.quickNotes.filter { matches([$0.title, $0.text, $0.tags.joined(separator: " ")].joined(separator: " ")) } : []
@@ -124,7 +124,10 @@ struct UnifiedSearchView: View {
         .taskFlowThemedBackground()
         .navigationTitle("Search")
         .searchable(text: $query, prompt: "Tasks, events, notes, and comments")
-        .searchScopes($scope) { ForEach(SearchCategory.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+        .searchScopes($scope) {
+            ForEach(SearchCategory.allCases.filter { $0 != .events || repository.showsCalendarEvents }, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .onChange(of: repository.showsCalendarEvents) { _, shows in if !shows && scope == .events { scope = .all } }
         .onSubmit(of: .search) { remember() }
         .fullScreenCover(item: $searchEvent) { event in
             CalendarEventDetailView(repository: repository, event: event, color: repository.eventCalendars.first { $0.id == event.calendarID }?.color ?? .blue)

@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSCameraUsageDescription</key>
-	<string>TaskFlow uses the camera to scan store receipts so it can fill in prices on your shopping lists. Receipts are read on your device.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.surratt.TaskFlow.watchRefresh</string>
@@ -43,6 +41,8 @@
 	<string>TaskFlow Studio uses Calendar access to show events alongside due tasks in the calendar view.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>TaskFlow Studio uses Calendar access to show events alongside due tasks in the calendar view.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>TaskFlow uses the camera to scan store receipts so it can fill in prices on your shopping lists. Receipts are read on your device.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>TaskFlow Studio uses your microphone to dictate notes.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

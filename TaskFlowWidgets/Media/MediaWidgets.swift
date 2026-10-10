@@ -25,7 +25,7 @@ struct MediaWidgetListQuery: EntityStringQuery {
     func availableLists() -> [MediaWidgetListEntity] {
         guard hasEventKitAccess(EKEventStore.authorizationStatus(for: .reminder)) else { return [] }
         let types = TaskFlowSharedSettings.defaults.dictionary(forKey: "TaskFlow.specializedListTypes") as? [String: String] ?? [:]
-        return EKEventStore().calendars(for: .reminder)
+        return TaskFlowSharedSettings.availableReminderLists(in: EKEventStore())
             .filter { types[$0.calendarIdentifier] == "Reading & Watch Later" }
             .map { MediaWidgetListEntity(id: $0.calendarIdentifier, title: $0.title) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }

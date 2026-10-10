@@ -28,7 +28,7 @@ struct ShoppingWidgetListQuery: EntityStringQuery {
     func availableLists() -> [ShoppingWidgetListEntity] {
         guard hasEventKitAccess(EKEventStore.authorizationStatus(for: .reminder)) else { return [] }
         let types = TaskFlowSharedSettings.defaults.dictionary(forKey: "TaskFlow.specializedListTypes") as? [String: String] ?? [:]
-        return EKEventStore().calendars(for: .reminder)
+        return TaskFlowSharedSettings.availableReminderLists(in: EKEventStore())
             .filter { $0.allowsContentModifications && types[$0.calendarIdentifier] == "Shopping & Groceries" }
             .map { ShoppingWidgetListEntity(id: $0.calendarIdentifier, title: $0.title) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }

@@ -225,10 +225,13 @@ struct QuickNoteEditorView: View {
                         }
                     )
 
-                    NavigationLink {
-                        EventLinkPicker(repository: repository, selection: Binding(get: { linkedEventID ?? "" }, set: { linkedEventID = $0.isEmpty ? nil : $0 }))
-                    } label: {
-                        LabeledContent { Text(linkedEventTitle) } label: { Label("Event", systemImage: "calendar") }
+                    // Linking a note to an event is offered only while calendars are in use; an existing link is kept.
+                    if repository.showsCalendarEvents {
+                        NavigationLink {
+                            EventLinkPicker(repository: repository, selection: Binding(get: { linkedEventID ?? "" }, set: { linkedEventID = $0.isEmpty ? nil : $0 }))
+                        } label: {
+                            LabeledContent { Text(linkedEventTitle) } label: { Label("Event", systemImage: "calendar") }
+                        }
                     }
                 }
             }

@@ -1017,15 +1017,16 @@ struct TodaySectionsEditor: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach(repository.todaySectionOrder) { section in
+                    ForEach(repository.availableTodaySectionOrder) { section in
                         let visibility = Binding(get: { repository.visibleTodaySections.contains(section) }, set: { repository.setTodaySectionVisible(section, $0) })
+                        let title = repository.todaySectionTitle(section)
                         if dynamicTypeSize.isAccessibilitySize {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(section.title).fixedSize(horizontal: false, vertical: true)
-                                Toggle(section.title, isOn: visibility).labelsHidden()
+                                Text(title).fixedSize(horizontal: false, vertical: true)
+                                Toggle(title, isOn: visibility).labelsHidden()
                             }
                         } else {
-                            Toggle(section.title, isOn: visibility)
+                            Toggle(title, isOn: visibility)
                         }
                     }.onMove { repository.moveTodaySections(fromOffsets: $0, toOffset: $1) }
                 } footer: { Text("Choose sections to show and drag to reorder. Quick Capture, Undo, and permission messages remain available.") }
@@ -1252,7 +1253,9 @@ struct UpcomingWatchReleases: View {
                                         }
                                     }
                                 }.buttonStyle(.plain)
-                                if repository.calendarEvents.contains(where: { ReadingMedia.hasEpisodeCalendarLink(notes: $0.notes, episodeID: item.episode.id) }) {
+                                if !repository.canCreateEvents {
+                                    EmptyView()
+                                } else if repository.calendarEvents.contains(where: { ReadingMedia.hasEpisodeCalendarLink(notes: $0.notes, episodeID: item.episode.id) }) {
                                     Label("Linked to Calendar", systemImage: "calendar.badge.checkmark").font(.caption).foregroundStyle(.secondary)
                                 } else {
                                     Button("Add Release to Calendar", systemImage: "calendar.badge.plus") { addToCalendar(item) }.font(.subheadline).buttonStyle(.borderless)

@@ -26,6 +26,10 @@ final class ShareViewController: UIViewController {
         preview.font = .preferredFont(forTextStyle: .footnote)
         preview.textColor = .secondaryLabel
         kindControl.selectedSegmentIndex = 0
+        // Calendar is optional in TaskFlow; with Calendars turned off in Settings, sharing can't make events.
+        if UserDefaults(suiteName: "group.com.surratt.TaskFlow")?.object(forKey: "TaskFlow.usesCalendars") as? Bool == false {
+            kindControl.setEnabled(false, forSegmentAt: 1)
+        }
         kindControl.addTarget(self, action: #selector(userChangedKind), for: .valueChanged)
         titleField.placeholder = "Title (optional)"
         titleField.borderStyle = .roundedRect

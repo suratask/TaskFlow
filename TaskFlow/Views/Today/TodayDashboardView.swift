@@ -76,7 +76,7 @@ struct TodayDashboardView: View {
     var body: some View {
         ScrollViewReader { proxy in
         List {
-            if repository.accessState != .granted {
+            if repository.accessState != .granted && repository.usesReminders {
                 Section {
                     Text(repository.accessState.message).foregroundStyle(.secondary)
                     if repository.accessState == .unknown {
@@ -111,7 +111,9 @@ struct TodayDashboardView: View {
                         draft.dueDate = Calendar.current.startOfDay(for: Date())
                         editorDraft = draft
                     }
-                    Button("New Event", systemImage: "calendar.badge.plus") { captureEventDraft = repository.makeEventDraft() }
+                    if repository.canCreateEvents {
+                        Button("New Event", systemImage: "calendar.badge.plus") { captureEventDraft = repository.makeEventDraft() }
+                    }
                     Button("Quick Capture", systemImage: "text.cursor") { showsQuickCapture = true }
                 } label: {
                     Label("Add", systemImage: "plus")
@@ -156,7 +158,7 @@ struct TodayDashboardView: View {
         case .summary, .suggested, .focus, .timeline: true
         case .priorities, .tasks, .capture: repository.accessState == .granted
         case .overdue: !repository.overdueTasks.isEmpty
-        case .calendar: !todayEvents.isEmpty
+        case .calendar: repository.showsCalendarEvents && !todayEvents.isEmpty
         case .tomorrow: repository.upcomingTasks.contains { $0.dueDate.map { Calendar.current.isDateInTomorrow($0) } == true }
         }
     }
@@ -173,9 +175,8 @@ struct TodayDashboardView: View {
                 Button {
                     revealSection(.timeline, anchor: "today-timeline", proxy: proxy)
                 } label: {
-                    if repository.eventAccessState == .granted {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            let entries = TodayPlanning.timeline(tasks: repository.tasks, events: repository.calendarEvents, now: context.date)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let entries = TodayPlanning.timeline(tasks: repository.tasks, events: repository.showsCalendarEvents ? repository.calendarEvents : [], now: context.date)
                             let seconds = TodayPlanning.availableSeconds(entries, now: context.date)
                             Label {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -188,13 +189,9 @@ struct TodayDashboardView: View {
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel("Available time today")
                             .accessibilityValue("\(seconds / 3600) hours, \((seconds % 3600) / 60) minutes, \(seconds % 60) seconds")
-                        }
-                    } else {
-                        Label("Available time appears when Calendar events are shown", systemImage: "clock")
-                            .font(.subheadline).fixedSize(horizontal: false, vertical: true)
                     }
                 }.buttonStyle(.plain)
-                eventSpotlight
+                if repository.showsCalendarEvents { eventSpotlight }
             } header: {
                 Text(now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
             }
@@ -226,13 +223,15 @@ struct TodayDashboardView: View {
                         }.fixedSize(horizontal: false, vertical: true)
                     }.buttonStyle(.plain)
                 }
-                if timelineEntries.isEmpty { Text("No timed tasks or events today").foregroundStyle(.secondary) }
-                if repository.eventAccessState == .granted {
-                    ForEach(availableGaps) { gap in
-                        Label("Free " + gap.start.formatted(date: .omitted, time: .shortened) + " – " + gap.end.formatted(date: .omitted, time: .shortened) + " · " + gap.durationText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                } else { Text("Connect Calendar to include events in available time.").foregroundStyle(.secondary) }
-            } header: { Text("Combined Timeline") } footer: { Text("Task blocks start at their due time. Missing estimates use 30 minutes. Free time covers the rest of today; all-day events do not reserve time.") }
+                if timelineEntries.isEmpty { Text(repository.showsCalendarEvents ? "No timed tasks or events today" : "No timed tasks today").foregroundStyle(.secondary) }
+                ForEach(availableGaps) { gap in
+                    Label("Free " + gap.start.formatted(date: .omitted, time: .shortened) + " – " + gap.end.formatted(date: .omitted, time: .shortened) + " · " + gap.durationText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary)
+                }
+            } header: { Text(repository.todaySectionTitle(.timeline)) } footer: {
+                Text(repository.showsCalendarEvents
+                     ? "Task blocks start at their due time. Missing estimates use 30 minutes. Free time covers the rest of today; all-day events do not reserve time."
+                     : "Task blocks start at their due time. Missing estimates use 30 minutes. Free time covers the rest of today.")
+            }
             .id("today-timeline")
 
         case .priorities:
@@ -318,7 +317,7 @@ struct TodayDashboardView: View {
                             dashboardTaskRow($0, canCommit: true)
                         }
                     }
-                }
+                }.id("today-tomorrow")
             }
         case .suggested:
             if !suggestedTasks.isEmpty || !repository.overdueTasks.isEmpty {
@@ -349,10 +348,18 @@ struct TodayDashboardView: View {
     @ViewBuilder private func summaryButtons(_ proxy: ScrollViewProxy) -> some View {
         summaryButton("Due Today", count: openTodayTasks.count) { revealSection(.tasks, anchor: "today-tasks", proxy: proxy) }
         summaryButton("Overdue", count: repository.overdueTasks.count) { overdueExpanded = true; revealSection(.overdue, anchor: "today-overdue", proxy: proxy) }
-        summaryButton("Events", count: todayEvents.filter { $0.endDate > now }.count) { revealSection(.calendar, anchor: "today-events", proxy: proxy) }
+        if repository.showsCalendarEvents {
+            summaryButton("Events", count: todayEvents.filter { $0.endDate > now }.count) { revealSection(.calendar, anchor: "today-events", proxy: proxy) }
+        } else {
+            // Task-only Today: the third tile looks ahead instead of counting events.
+            summaryButton("Tomorrow", count: tomorrowTaskCount) { tomorrowExpanded = true; revealSection(.tomorrow, anchor: "today-tomorrow", proxy: proxy) }
+        }
     }
     private var timelineEntries: [TodayPlanning.TimelineEntry] {
-        TodayPlanning.timeline(tasks: repository.tasks, events: todayEvents, now: now)
+        TodayPlanning.timeline(tasks: repository.tasks, events: repository.showsCalendarEvents ? todayEvents : [], now: now)
+    }
+    private var tomorrowTaskCount: Int {
+        repository.upcomingTasks.filter { task in task.dueDate.map { Calendar.current.isDateInTomorrow($0) } == true }.count
     }
     private var availableGaps: [DayTimeGap] { TodayPlanning.gaps(timelineEntries, now: now) }
     private var focusTask: TaskItem? {
@@ -361,8 +368,8 @@ struct TodayDashboardView: View {
         }
         let remaining = candidates.filter { !skippedFocusIDs.contains($0.id) }
         return (remaining.isEmpty ? candidates : remaining).sorted {
-            let a = TodayPlanning.focusScore($0, pinned: repository.isTodayPriority($0), availableMinutes: repository.eventAccessState == .granted ? availableGaps.first?.minutes : nil, now: now)
-            let b = TodayPlanning.focusScore($1, pinned: repository.isTodayPriority($1), availableMinutes: repository.eventAccessState == .granted ? availableGaps.first?.minutes : nil, now: now)
+            let a = TodayPlanning.focusScore($0, pinned: repository.isTodayPriority($0), availableMinutes: availableGaps.first?.minutes, now: now)
+            let b = TodayPlanning.focusScore($1, pinned: repository.isTodayPriority($1), availableMinutes: availableGaps.first?.minutes, now: now)
             return a == b ? $0.id < $1.id : a > b
         }.first
     }
@@ -409,21 +416,8 @@ struct TodayDashboardView: View {
         case .next(let event): spotlightCard(event, status: "Up Next", time: event.startDate.formatted(date: .omitted, time: .shortened))
         case .allDay(let event): spotlightCard(event, status: "On Your Calendar", time: "All Day")
         case .finished: Label("No more timed events today", systemImage: "calendar.badge.checkmark").foregroundStyle(.secondary)
-        case .empty:
-            if repository.eventAccessState == .granted { Label("Nothing scheduled on your calendar today", systemImage: "calendar").foregroundStyle(.secondary) }
-            else {
-                // Neutral wording before the system prompt (App Review 5.1.1(iv)); Settings once declined.
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Calendar events can appear here alongside your tasks.", systemImage: "calendar").foregroundStyle(.secondary)
-                    if repository.eventAccessState == .unknown {
-                        Button("Continue") { Task { await repository.requestEventCalendarAccess() } }
-                    } else {
-                        Button("Open Settings") {
-                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                        }
-                    }
-                }
-            }
+        // Shown only while calendars are in use; connecting Calendar lives in Settings and the Calendar tab.
+        case .empty: Label("Nothing scheduled on your calendar today", systemImage: "calendar").foregroundStyle(.secondary)
         }
     }
     private func spotlightCard(_ event: CalendarEvent, status: String, time: String) -> some View {

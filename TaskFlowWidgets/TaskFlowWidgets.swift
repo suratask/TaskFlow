@@ -6,6 +6,11 @@ import WidgetKit
 import CryptoKit
 import ImageIO
 
+/// Whether widgets include calendar events: Calendars are on in TaskFlow and access was granted.
+var widgetShowsCalendarEvents: Bool {
+    TaskFlowSharedSettings.usesCalendars && hasEventKitAccess(EKEventStore.authorizationStatus(for: .event))
+}
+
 func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
     if #available(iOS 17.0, *) {
         return status == .fullAccess

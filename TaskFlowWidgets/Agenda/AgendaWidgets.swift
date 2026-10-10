@@ -190,7 +190,7 @@ struct WidgetReminderListQuery: EntityQuery {
     func suggestedEntities() async throws -> [WidgetReminderListEntity] { lists }
     private var lists: [WidgetReminderListEntity] {
         guard hasEventKitAccess(EKEventStore.authorizationStatus(for: .reminder)) else { return [] }
-        return EKEventStore().calendars(for: .reminder).map {
+        return TaskFlowSharedSettings.availableReminderLists(in: EKEventStore()).map {
             WidgetReminderListEntity(id: $0.calendarIdentifier, title: $0.title)
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
@@ -453,10 +453,10 @@ struct MixedAgendaWidgetView: View {
                 }
             }
             if entry.accessNeeded {
-                Text("Allow Calendar and Reminders access in TaskFlow.")
+                Text("Allow Reminders access in TaskFlow.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if entry.items.isEmpty {
-                Text("No events or reminders").font(.caption).foregroundStyle(.secondary)
+                Text(widgetShowsCalendarEvents ? "No events or reminders" : "No reminders").font(.caption).foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 0) {
                     ForEach(entry.items.prefix(limit)) { item in
@@ -484,7 +484,7 @@ struct NextUpWidgetView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Next Up").font(.headline.weight(.semibold))
             if entry.accessNeeded {
-                Text("Allow Calendar and Reminders access in TaskFlow.").font(.caption).foregroundStyle(.secondary)
+                Text("Allow Reminders access in TaskFlow.").font(.caption).foregroundStyle(.secondary)
             } else if let item = entry.items.first {
                 AgendaTimelineRow(item: item, theme: entry.theme, compact: family == .systemSmall)
             } else {
