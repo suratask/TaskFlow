@@ -354,12 +354,21 @@ const unlockedFormatting = new Set();
 /// The app's formatting lives on the device. Editing the text here saves it as
 /// Markdown, which the app then shows in place of it, so the text of such a
 /// note stays locked until asked. The title, tags, pin and Trash keep it.
-const bodyLocked = () => Boolean(features.formattingLock) && Boolean(draft) && !isDeleted(draft) && draft.hasRichText && draft.body === draft.originalBody && !unlockedFormatting.has(draft.id);
+/// Whether the open note still has the app's formatting, unedited here.
+const keepsAppFormatting = () => Boolean(features.formattingLock) && Boolean(draft) && !isDeleted(draft) && draft.hasRichText && draft.body === draft.originalBody;
+const bodyLocked = () => keepsAppFormatting() && !unlockedFormatting.has(draft.id);
 $('unlock-format').onclick = () => {
   if (!draft) return;
   unlockedFormatting.add(draft.id); renderNoteState();
   rich.focus();
 };
+// Clicking or tapping the text unlocks it too, with the caret where it landed:
+// the editor turns editable before the browser handles the press. Only an
+// actual change replaces the app's formatting, so a stray click costs nothing.
+$('note-body').addEventListener('pointerdown', () => {
+  if (!bodyLocked()) return;
+  unlockedFormatting.add(draft.id); renderNoteState();
+}, true);
 function renderNoteState() {
   if (!draft) return;
   const trashed = isDeleted(draft), locked = bodyLocked();
@@ -374,7 +383,8 @@ function renderNoteState() {
   $('trash-note').disabled = !canTrash(draft);
   $('trash-note').title = canTrash(draft) ? 'Move to Trash' : `Move drawing notes to Trash in the ${APP} app, so the drawing isn’t lost`;
   document.querySelector('.editor-pane').classList.toggle('body-locked', locked);
-  $('format-lock').hidden = !locked;
+  // The notice stays until the text is changed, so a click-to-edit still sees it.
+  $('format-lock').hidden = !keepsAppFormatting(); $('unlock-format').hidden = !locked;
   if (rich.isEnabled() === (trashed || locked)) rich.enable(!(trashed || locked));
   $('note-title').readOnly = trashed; $('note-folder').disabled = trashed;
   renderBadges(); renderInfo(); renderDone();
@@ -383,7 +393,7 @@ function renderNoteState() {
 function renderBadges() {
   const badges = [];
   if (isDeleted(draft)) badges.push(['In Trash', 'Restore this note to edit it.', 'trash']);
-  badges.push(...noteBadges(draft, {locked: bodyLocked()}));
+  badges.push(...noteBadges(draft, {locked: keepsAppFormatting()}));
   const files = draft.attachments?.length ?? 0;
   if (files) badges.push([`📎 ${files} ${files === 1 ? 'attachment' : 'attachments'}`, `Attachments stay in the ${APP} app, and edits here keep them.`]);
   $('note-badges').replaceChildren(...badges.map(([text, title, kind]) => {
