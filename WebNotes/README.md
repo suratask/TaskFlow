@@ -1,32 +1,19 @@
-# TaskFlow Notes — iCloud browser prototype
+# TaskFlow Notes on the web
 
-Target page: `https://modcaststudios.app/notes/`.
+Live at `https://modcaststudios.app/notes`.
 
-This is a static browser client. Cloudflare serves editor files; Apple's private CloudKit database stores authenticated users' notes. There is no TaskFlow notes server, Cloudflare database, analytics, or separate TaskFlow account. This code does not make TaskFlow notes appear in Apple's Notes app.
+A static browser client. Apple's private CloudKit database (container `iCloud.com.surratt.TaskFlow`) stores each signed-in user's notes; the page talks to it directly with CloudKit JS. There is no TaskFlow notes server, no Cloudflare database or analytics, and no separate TaskFlow account.
 
-## Current state
+## How it fits together
 
-Implemented and tested locally:
-
-- Rich text: selected-word bold/italic, headings, bullet/numbered/check lists, quotes, links, normal paragraphs, and keyboard Undo/Redo. Quill 2.0.3 is bundled locally under its BSD license. Note content uses TaskFlow's Markdown-compatible storage.
-- Create/edit, folders, search, tags, pinning, Trash/Restore, autosave, refresh, and explicit save indicators.
-- Conditional CloudKit writes retain recordChangeTag. Stale saves open a choice of Keep Both, Keep Mine, or Keep Other Version. An edit made during a save is serialized after that save with its new change tag.
-- Failed saves preserve a session draft and offer a Markdown download. Reload recovery retains the original version for conflict detection. Sign-out clears note content and account-specific session drafts; unsaved work requires an explicit discard decision.
-- A local sample-notes mode exercises the interface without calling iCloud. It is clearly labelled and is cleared on sign-out.
-- An opt-in native bridge mirrors one note per CloudKit record, with three-way comparisons against account-specific local checkpoints. Concurrent native edits are preserved as separate Recovered Notes. Deletion records prevent stale copies from silently reappearing.
-- Native text updates keep existing drawings, attachment metadata, and version history. Drawing notes can be read and their text edited on the web; drawing creation, deletion, and restoration stay in TaskFlow for this prototype.
-
-The site is deployed at https://modcaststudios.app/notes with production CloudKit configuration. The user reported successful live authentication and native/browser sync after deploying the production schema. Debug builds use Development; Release builds use Production and enable the bridge. Automated browser tests use a local fake CloudKit service, not authenticated accounts; automated tests do not independently establish account isolation or cross-browser release readiness. The checked-in browser config intentionally has a blank API token; configured deployment packages use a local token file.
-
-## Local preview
-
-From the repository root:
-
-```sh
-python3 -m http.server 8765 --bind 127.0.0.1 --directory WebNotes
-```
-
-Open `http://127.0.0.1:8765/` and choose **Explore with sample notes**. iCloud will show a preparation message until developer configuration is supplied.
+- **Records:** one `TaskFlowWebNote` record per note. `payload` is the app's `QuickNote` JSON without drawing or history (`CloudWebNote` in `TaskFlow/Services/CloudNotesSyncService.swift`); `isDeleted` and `hasDrawing` are record fields. The app publishes `TaskFlowWebNotesReady` once it has synced, and the page waits for it.
+- **The page's UI is shared with Sebastian's web notes** (Sebastian repo, `WebNotes/`). `core.mjs` maps TaskFlow's records to the same note shape Sebastian's page uses (`body`, `pinnedAt`, `deletedAt`, `modifiedAt`), so `app.mjs`, `rich-text.mjs` and `styles.css` stay close to Sebastian's. When fixing one page, check the other.
+- **Text formats:** `text` + `format` (plain, bullets, checklist, quote, markdown) are shown as Markdown in the editor. A note whose text isn't edited keeps its `text` and `format` byte for byte; an edited text is saved as Markdown.
+- **Folders, tags and pins** edit the payload directly. **Tag colours** match the app: the colours chosen in TaskFlow come from its metadata record (`TaskFlowMetadataSnapshot` → `savedTags`, read every ten minutes because the record holds all app metadata), others use the app's default (`MetadataSnapshot.defaultColor(for:)`).
+- **Drawing notes** can be edited here (the app keeps the drawing), but not moved to Trash: trashing from the web would lose the drawing in the app.
+- **No permanent delete on the web.** The app uploads its copy again when a record disappears from iCloud, so Empty Trash / Delete Permanently would not stick. Trash and Restore work.
+- **Stability** (same as Sebastian's page): background sync never replaces the note being edited (a banner offers the newer version); saves never rewrite the editor; failed saves retry with backoff; hiding or closing the tab saves at once; unsaved changes are backed up in localStorage and recovered after a crash; an expired Apple session shows sign-in in place; idle tabs reload onto a new deploy (`/notes/version.json`).
+- Not on the web: adding images or files, drawing, history, resolving notes and linking to tasks or events (shown as badges).
 
 ## One-time developer setup: CloudKit
 
@@ -47,54 +34,34 @@ Debug builds enable the native WebNotes bridge for DEVELOPMENT testing. Release 
 
 The first bridge retains legacy snapshot syncing for compatibility; this is a staged migration, not removal of the legacy store. Account checkpoints are saved under Application Support/WebNoteSync/<environment> only after native persistence. Environment separation prevents development baselines from being reused in production. Older unscoped checkpoints are retained but not loaded; the first sync after this update can conservatively create recovered copies when local and remote notes differ. Older clients can continue writing legacy data; overlapping edits are recovered rather than automatically discarded. Live mixed-version testing is required before general release.
 
-## Cloudflare preparation
+## Build and publish
 
-Package the preview assets:
-
-```sh
-python3 WebNotes/build.py
-```
-
-For a configured DEVELOPMENT staging package:
+The page is its own Cloudflare Worker, `taskflow-notes`, on the routes `modcaststudios.app/notes*` and `www.modcaststudios.app/notes*`. The rest of modcaststudios.app is the `modcast-studios` Worker, which another tool redeploys in full; a route runs ahead of the site's Worker, so those deploys can't replace or break this page.
 
 ```sh
-python3 WebNotes/build.py --environment development --token-file /absolute/path/to/local-token.txt
+python3 WebNotes/build.py --environment production --token-file "taskflow-notes-token Production.txt"
+cd WebNotes/deploy && npx wrangler@4.40.0 deploy
 ```
 
-For production, AFTER the live validation checklist passes:
+- `build.py` writes `.build/WebNotes/site/notes.html` (the page, served at `/notes`) and `.build/WebNotes/site/notes/` (scripts, styles, icons, `config.js`, `version.json`, served at `/notes/...`). The page uses absolute asset paths.
+- The token file lives next to the repository and is excluded in `.git/info/exclude`. Never commit it or paste it into chat.
+- `deploy/worker.js` serves `/notes`, answers `/notes/` with a 301 to `/notes` (the direction browsers have long cached), returns 404 for anything else under the route (such as the old flat `/notes-*.mjs` files), sends `www` to `modcaststudios.app` (iCloud sign-in is registered for that origin only), and adds the CSP, no-store and noindex headers plus `X-Served-By: taskflow-notes`. Check with `curl -sI https://modcaststudios.app/notes`.
+- `npx wrangler login` once per Mac. Right after a deploy some requests can return 500 for about a minute.
+
+## Local preview
 
 ```sh
-python3 WebNotes/build.py --environment production --token-file /absolute/path/to/local-token.txt
+python3 WebNotes/build.py && python3 -m http.server 8765 --bind 127.0.0.1 --directory .build/WebNotes/site
 ```
 
-Output is `.build/WebNotes/notes/`, with `.build/WebNotes/_headers`. Merge the `notes` directory into the existing site's static build output. Merge the header rules with the site's existing `_headers`; do not replace existing site files or publish this directory as the entire existing Pages project. The site's build pipeline and project name still need to be identified in Cloudflare.
-
-The supplied headers include CSP, no-referrer, no-sniff, no-store and noindex. Verify real Apple authentication under that CSP on staging. Cloudflare Pages applies `_headers` to static assets; a Worker or Pages Function that handles these routes must set equivalent response headers itself. Check existing global header/redirect rules for conflicts and ensure `/notes/` serves this editor rather than the site's SPA fallback. `.mjs` assets must be served with a JavaScript MIME type.
-
-Cloudflare stores only these static files. No Cloudflare API endpoint receives note content. Do not add note analytics, HTML error reporting, or note bodies to server logs.
-
-## Live validation before public release
-
-1. Same account: native create → web read/edit → native read; web create → native read/edit → web read.
-2. Different accounts: verify each user sees only their private notes.
-3. Native and browser simultaneous edits, two browser tabs, edit versus delete, and retry after record-change conflicts.
-4. Failed saves, expired sessions, full iCloud storage, offline draft recovery, signing out on a shared computer, and a reopened tab.
-5. Existing notes migration, older installed TaskFlow versions, folders/tags/pins, mixed formatting, Unicode, large notes, and attachment/drawing retention.
-6. Safari, Chrome and Edge on macOS/Windows, phone layout, keyboard controls and large text.
-7. Privacy headers, static asset routing, schema deployment, and signed app entitlements.
-
-Only after those checks: deploy the CloudKit schema to production, package with the production web token, preview the merged Cloudflare site, approve public deployment, and enable the app's release setting. The Notes menu then exposes **Open Notes in Browser**. Background delivery is not promised: app updates arrive through its existing sync/foreground flow, and an open browser refreshes on focus and periodically.
-
-Future work after this milestone: incremental CloudKit change fetching for large libraries, broader Markdown compatibility, browser attachment uploads/drawing tools, native Trash UI aligned with browser Trash, and physical-device/background verification. These are deliberately outside the initial authentication-and-sync prototype.
+Open `http://127.0.0.1:8765/notes.html` and choose **Try it with sample notes**.
 
 ## Automated checks
 
 ```sh
-node --test WebNotes/tests/core.test.mjs
+cd WebNotes && npm test
 ```
 
-Browser tests in `tests/browser.cjs` and `tests/conflicts-browser.cjs` use Playwright and an isolated headless Chrome; their runtime package path is specific to this workspace and can be adapted to a locally installed Playwright. No real iCloud credentials are used.
+The tests in `tests/core.test.mjs` pin the record mapping against payloads as the app writes them: untouched text and formats, the app's projection (no drawing, history or edit stamp), the drawing rule, tag colours from the app's own formula, folders, conflicts and CloudKit errors. Native tests are in `TaskFlowTests/`.
 
-Native regression tests are in `TaskFlowTests/TaskRepositoryTests.swift`. Validation logs and screenshots are in `.build/validation/web-notes-*`.
-
-References: [Apple CloudKit JS](https://developer.apple.com/documentation/cloudkitjs), [Apple web authentication](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitWebServicesReference/SettingUpWebServices.html), [Quill](https://quilljs.com/docs/quickstart), [Cloudflare static headers](https://developers.cloudflare.com/pages/configuration/headers/).
+References: [Apple CloudKit JS](https://developer.apple.com/documentation/cloudkitjs), [Quill](https://quilljs.com/docs/quickstart), [Cloudflare Workers routes](https://developers.cloudflare.com/workers/configuration/routing/routes/).

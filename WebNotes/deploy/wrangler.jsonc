@@ -1,0 +1,22 @@
+// TaskFlow Notes on the web, as its own Worker.
+//
+// modcaststudios.app itself is the `modcast-studios` Worker, which another
+// tool redeploys in full — replacing every file and its script each time.
+// These routes send /notes* here first, so those deploys can't replace or
+// break this page. Deploy after `python3 WebNotes/build.py`.
+{
+  "name": "taskflow-notes",
+  "main": "worker.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": false,
+  "routes": [
+    {"pattern": "modcaststudios.app/notes*", "zone_name": "modcaststudios.app"},
+    {"pattern": "www.modcaststudios.app/notes*", "zone_name": "modcaststudios.app"}
+  ],
+  "assets": {
+    "directory": "../../.build/WebNotes/site",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none"
+  }
+}
