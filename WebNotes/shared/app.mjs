@@ -663,38 +663,108 @@ const isApple = /Mac|iPhone|iPad/.test(navigator.platform);
 const modKey = isApple ? '⌘' : 'Ctrl+';
 /// "⇧⌘9" and "⌘Return" as this system writes them ("Ctrl+Shift+9", "Ctrl+Return").
 const keyLabel = text => isApple ? text : text.replace(/⇧⌘/g, 'Ctrl+Shift+').replace(/⌘/g, 'Ctrl+');
-for (const element of document.querySelectorAll('[data-keys]')) element.dataset.keys = keyLabel(element.dataset.keys);
+// Buttons carry their help with `keys` marked; the tooltip shows it as plain text.
+const plainHelp = text => keyLabel(text.replace(/`/g, ''));
+for (const element of document.querySelectorAll('[data-help]')) element.dataset.keys = plainHelp(element.dataset.help);
 
-/// The reference lists the toolbar's own buttons (icon, name, hint), so it
-/// can't drift from them, then the page's other shortcuts.
-function renderHelp() {
-  const row = (icon, label, keys) => {
-    const tr = document.createElement('tr'), iconCell = document.createElement('td'), labelCell = document.createElement('th'), keysCell = document.createElement('td');
-    iconCell.className = 'help-icon'; if (icon) iconCell.append(icon);
-    labelCell.scope = 'row'; labelCell.textContent = label; keysCell.textContent = keys;
-    tr.append(iconCell, labelCell, keysCell); return tr;
-  };
-  $('help-format').replaceChildren(...[...document.querySelectorAll('#format-bar button[data-tip]:not(#format-help)')]
-    .map(button => row(button.querySelector('svg')?.cloneNode(true), button.dataset.tip, button.dataset.keys)));
-  $('help-more').replaceChildren(...[
-    ['Tick a checklist item', keyLabel('Click its circle, or ⌘Return on its line')],
-    ['Indent a list item', 'Tab (⇧Tab to undo)'],
-    ['Open a link', `${isApple ? '⌘' : 'Ctrl'}-click it (tap on a phone)`],
-    ['Save now', `${modKey}S (notes also save as you type)`],
-    ['Add a tag', 'Type at the bottom of a note, then Return'],
-  ].map(([label, keys]) => row(null, label, keys)));
-  // Single keys, which work whenever the cursor isn't in a note or a field.
-  $('help-keys').replaceChildren(...[
-    ['New note', 'N'],
-    ['Search', '/ (then # for a tag)'],
-    ['Next / previous note', 'J / K (or ↓ / ↑ in the list)'],
-    ['Edit the open note', 'Return'],
-    ['Back to the list', 'Esc, from inside a note'],
-    ['This help', '?'],
-  ].map(([label, keys]) => row(null, label, keys)));
+/// The reference: the toolbar's own buttons (icon, name and help, so it can't
+/// drift from them), then the page's other shortcuts. Help text marks keys
+/// with backticks, which are drawn as keycaps.
+const HELP_SECTIONS = () => [
+  {title: 'Formatting', rows: [...document.querySelectorAll('#format-bar button[data-help]:not(#format-help)')]
+    .map(button => ({icon: button.querySelector('svg'), label: button.dataset.tip, help: button.dataset.help}))},
+  {title: 'In a note', rows: [
+    {label: 'Tick a checklist item', help: 'Click its circle, or `⌘Return`'},
+    {label: 'Indent a list item', help: '`Tab`, or `⇧Tab` to undo'},
+    {label: 'Open a link', help: '`⌘`-click it, or tap on a phone'},
+    {label: 'Save now', help: '`⌘S`, though notes save as you type'},
+    {label: 'Add a tag', help: 'Type it below the note, then `Return`'},
+    {label: 'Back to the list', help: '`Esc`'},
+  ]},
+  {title: 'Anywhere else, when not typing', rows: [
+    {label: 'New note', help: '`N`'},
+    {label: 'Search', help: '`/`, then `#` for a tag'},
+    {label: 'Next / previous note', help: '`J` / `K`, or `↓` / `↑` in the list'},
+    {label: 'Edit the open note', help: '`Return`'},
+    {label: 'This help', help: '`?`'},
+  ]},
+];
+/// "⇧⌘9" → ⇧ ⌘ 9; "Ctrl+Shift+9" → Ctrl Shift 9; "[ ]" stays one key.
+function keycaps(token) {
+  const label = keyLabel(token).replace(/\+$/, '');
+  const parts = isApple ? label.match(/[⇧⌘⌥⌃]|[^⇧⌘⌥⌃]+/g) : label.split(/\+(?=.)/);
+  const group = document.createElement('span'); group.className = 'help-keys';
+  group.append(...parts.filter(Boolean).map(part => { const kbd = document.createElement('kbd'); kbd.textContent = part; return kbd; }));
+  return group;
 }
-$('format-help').onclick = () => { renderHelp(); $('help-dialog').showModal(); };
+function renderHelp() {
+  const sections = HELP_SECTIONS().map(({title, rows}) => {
+    const card = document.createElement('section'); card.className = 'help-card' + (rows.some(row => row.icon) ? '' : ' no-icons');
+    const heading = document.createElement('h3'); heading.textContent = title;
+    card.append(heading, ...rows.map(({icon, label, help}) => {
+      const row = document.createElement('div'); row.className = 'help-row';
+      const iconCell = document.createElement('span'); iconCell.className = 'help-icon'; if (icon) iconCell.append(icon.cloneNode(true));
+      const name = document.createElement('span'); name.className = 'help-label'; name.textContent = label;
+      const desc = document.createElement('span'); desc.className = 'help-desc';
+      // Odd pieces between backticks are keys.
+      desc.append(...help.split('`').map((piece, index) => index % 2 ? keycaps(piece) : piece));
+      row.dataset.search = `${label} ${plainHelp(help)}`.toLocaleLowerCase();
+      // The shortcuts a key press can find: combinations with ⌘ (Ctrl elsewhere).
+      row.dataset.combos = (help.match(/`[^`]*⌘[^`]+`/g) ?? []).map(token => keyLabel(token.slice(1, -1))).join('\n');
+      row.append(iconCell, name, desc);
+      return row;
+    }));
+    return card;
+  });
+  $('help-sections').replaceChildren(...sections);
+  filterHelp();
+}
+function filterHelp() {
+  const query = $('help-filter').value.trim().toLocaleLowerCase();
+  let shown = 0;
+  for (const card of $('help-sections').children) {
+    let visible = 0;
+    for (const row of card.querySelectorAll('.help-row')) { const match = !query || row.dataset.search.includes(query); row.hidden = !match; visible += match; }
+    card.hidden = !visible; shown += visible;
+  }
+  $('help-empty').hidden = shown > 0;
+}
+const HELP_TIP = matchMedia('(hover: none)').matches ? 'Type to search.' : `Type to search, or press a shortcut such as ${keyLabel('⌘B')} to find it.`;
+/// A key press with ⌘ (Ctrl elsewhere), written the way the reference writes it.
+function pressedCombo(event) {
+  const key = event.key === 'Enter' ? 'Return' : /^Digit\d$/.test(event.code) ? event.code.slice(5) : /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : null;
+  if (!key) return null;
+  return isApple ? (event.shiftKey ? '⇧' : '') + '⌘' + key : 'Ctrl+' + (event.shiftKey ? 'Shift+' : '') + key;
+}
+let helpFlashTimer;
+$('help-dialog').addEventListener('keydown', event => {
+  if (!(isApple ? event.metaKey : event.ctrlKey) || event.altKey) return;
+  const combo = pressedCombo(event);
+  // Select all, copy, cut, paste and undo keep working in the search box.
+  if (!combo || (!event.shiftKey && /[ACVXZ]$/.test(combo))) return;
+  event.preventDefault(); event.stopPropagation();
+  $('help-filter').value = ''; filterHelp();
+  const rows = [...$('help-sections').querySelectorAll('.help-row')].filter(row => row.dataset.combos.split('\n').includes(combo));
+  for (const row of $('help-sections').querySelectorAll('.flash')) row.classList.remove('flash');
+  clearTimeout(helpFlashTimer);
+  if (rows.length) {
+    for (const row of rows) row.classList.add('flash');
+    rows[0].scrollIntoView({block: 'nearest', behavior: 'smooth'});
+    $('help-tip').textContent = `${combo}: ${rows.map(row => row.querySelector('.help-label').textContent).join(', ')}`; $('help-tip').classList.remove('miss');
+  } else { $('help-tip').textContent = `${combo} isn’t a shortcut in Notes.`; $('help-tip').classList.add('miss'); }
+  helpFlashTimer = setTimeout(() => {
+    for (const row of $('help-sections').querySelectorAll('.flash')) row.classList.remove('flash');
+    $('help-tip').textContent = HELP_TIP; $('help-tip').classList.remove('miss');
+  }, 1800);
+});
+$('help-filter').addEventListener('input', filterHelp);
+$('format-help').onclick = () => {
+  $('help-filter').value = ''; $('help-tip').textContent = HELP_TIP; $('help-tip').classList.remove('miss');
+  renderHelp(); $('help-dialog').showModal(); $('help-filter').focus();
+};
 $('help-dialog-done').onclick = () => $('help-dialog').close();
+// A click on the dimmed page outside closes it too.
+$('help-dialog').addEventListener('click', event => { if (event.target === $('help-dialog')) $('help-dialog').close(); });
 for (const button of document.querySelectorAll('[data-format]')) {
   button.addEventListener('mousedown', event => event.preventDefault());
   button.addEventListener('click', () => {
