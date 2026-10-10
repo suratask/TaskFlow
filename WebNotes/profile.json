@@ -1,0 +1,16 @@
+{
+  "appName": "TaskFlow",
+  "containerIdentifier": "iCloud.com.surratt.TaskFlow",
+  "websiteURL": "https://modcaststudios.app/notes",
+  "storagePrefix": "TaskFlow.notes.",
+  "base": "/notes/",
+  "features": {"folders": true, "permanentDelete": false, "formattingLock": false},
+  "welcomeIntro": "Your TaskFlow notes in any browser.",
+  "welcomeFine": "Use the same Apple Account as TaskFlow, and sync your notes once in the TaskFlow app.",
+  "themeColors": {"light": "#e8f0fb", "dark": "#111a26"},
+  "samples": [
+    {"title": "Welcome to TaskFlow Notes", "body": "Your notes, in any browser.\n\n- **Title** at the top, writing below\n- Format with the toolbar, or ⌘B and ⌘I\n- File notes in folders and add tags at the bottom", "tags": ["taskflow"]},
+    {"title": "Weekend plans", "body": "- [ ] Farmers market\n- [ ] Walk by the water\n- [x] Book dinner", "tags": ["personal"], "folder": "Home"},
+    {"title": "Before Monday", "body": "## Get ahead\n\n1. Review the week\n2. Pick the first task\n\n> Small steps count.", "tags": ["work"], "folder": "Work"}
+  ]
+}

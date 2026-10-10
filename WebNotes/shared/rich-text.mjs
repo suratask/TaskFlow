@@ -1,4 +1,4 @@
-import {safeLink} from './core.mjs';
+import {safeLink} from '../core.mjs';
 /// A web address typed as plain text: http(s)://… or www.…, without trailing punctuation.
 export const URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>"]*[^\s<>".,;:!?'")\]]/gi;
 /// Where a typed address goes: www.… becomes https://www.…; anything unsafe is null.

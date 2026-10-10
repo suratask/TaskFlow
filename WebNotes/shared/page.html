@@ -1,31 +1,32 @@
 <!doctype html>
+<!-- Shared web notes page (Sebastian repo, WebNotes/shared/page.html). build_web_notes.py fills in the placeholders from the app’s profile.json. -->
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#e8f0fb">
-  <link rel="manifest" href="/notes/manifest.webmanifest">
-  <link rel="icon" href="/notes/icons/icon-192.png"><link rel="apple-touch-icon" href="/notes/icons/apple-touch-icon.png">
-  <title>TaskFlow Notes</title>
-  <link rel="stylesheet" href="/notes/vendor/quill.core.css"><link rel="stylesheet" href="/notes/styles.css">
-  <script src="/notes/vendor/quill.js" defer></script>
-  <script src="/notes/config.js" defer></script><script type="module" src="/notes/app.mjs"></script>
+  <meta name="theme-color" content="{{THEME_LIGHT}}">
+  <link rel="manifest" href="{{BASE}}manifest.webmanifest">
+  <link rel="icon" href="{{BASE}}icons/icon-192.png"><link rel="apple-touch-icon" href="{{BASE}}icons/apple-touch-icon.png">
+  <title>{{APP}} Notes</title>
+  <link rel="stylesheet" href="{{BASE}}shared/vendor/quill.core.css"><link rel="stylesheet" href="{{BASE}}shared/styles.css"><link rel="stylesheet" href="{{BASE}}theme.css">
+  <script src="{{BASE}}shared/vendor/quill.js" defer></script>
+  <script src="{{BASE}}config.js" defer></script><script type="module" src="{{BASE}}shared/app.mjs"></script>
 </head>
-<body>
+<body class="{{BODY_CLASS}}">
 <main id="welcome" class="welcome">
-  <img class="welcome-icon" src="/notes/icons/icon-192.png" alt="">
-  <h1>TaskFlow Notes</h1>
-  <p>Your TaskFlow notes in any browser.<br>They stay in your own iCloud.</p>
+  <img class="welcome-icon" src="{{BASE}}icons/icon-192.png" alt="">
+  <h1>{{APP}} Notes</h1>
+  <p>{{WELCOME_INTRO}}<br>They stay in your own iCloud.</p>
   <button id="connect" class="primary">Continue with iCloud</button>
   <div id="apple-signin"></div><div id="apple-signout" hidden></div>
   <button id="try-demo" class="link">Try it with sample notes</button>
-  <p class="fine">Use the same Apple Account as TaskFlow, and sync your notes once in the TaskFlow app.</p>
+  <p class="fine">{{WELCOME_FINE}}</p>
   <p id="welcome-error" class="error" role="alert"></p>
 </main>
 
 <div id="workspace" class="app" hidden>
-  <nav id="sidebar" class="sidebar" aria-label="Notes and tags">
-    <div class="brand"><img src="/notes/icons/brand.png" alt=""><span>TaskFlow</span><span class="brand-sub">Notes</span></div>
+  <nav id="sidebar" class="sidebar" aria-label="Notes, folders and tags">
+    <div class="brand"><img src="{{BASE}}icons/brand.png" alt=""><span>{{APP}}</span><span class="brand-sub">Notes</span></div>
     <button class="nav-item" data-view="all"><span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">All Notes</span><span class="count" id="count-all"></span></button>
     <button class="nav-item" data-view="trash"><span class="nav-icon" aria-hidden="true">🗑︎</span><span class="nav-label">Trash</span><span class="count" id="count-trash"></span></button>
     <div id="folders-section" class="tags-section" hidden>
@@ -33,7 +34,7 @@
       <div id="folders-body"><div id="folder-nav" class="tag-nav"></div></div>
     </div>
     <div id="tags-section" class="tags-section">
-      <h2 class="nav-heading"><button id="tags-toggle" class="heading-toggle" aria-expanded="true" aria-controls="tags-body">Tags <span class="chevron" aria-hidden="true">⌄</span></button></h2>
+      <h2 class="nav-heading"><button id="tags-toggle" class="heading-toggle" aria-expanded="true" aria-controls="tags-body">Tags <span class="chevron" aria-hidden="true">⌄</span></button><button id="tags-edit" class="heading-action" title="Rename, merge or remove tags">Edit</button></h2>
       <div id="tags-body">
         <div id="tag-nav" class="tag-nav"></div>
         <div id="all-tags" hidden>
@@ -71,7 +72,8 @@
     <div id="notice" class="notice" role="status" hidden></div>
     <div class="list-head"><span id="list-title" class="list-title"></span>
       <label class="sr-only" for="sort-select">Sort notes</label>
-      <select id="sort-select" class="sort-select" title="Sort notes"><option value="modified">Last modified</option><option value="created">Date created</option><option value="title">Title</option></select></div>
+      <select id="sort-select" class="sort-select" title="Sort notes"><option value="modified">Last modified</option><option value="created">Date created</option><option value="title">Title</option></select>
+      <button id="empty-trash" class="text-button danger" hidden>Empty Trash</button></div>
     <div id="note-list" class="note-list"></div>
   </section>
 
@@ -91,10 +93,12 @@
       </div>
       <span id="save-state" class="save-state" role="status" aria-live="polite"></span>
       <button id="download-draft" class="text-button" hidden>Download Draft</button>
+      <button id="hide-done" class="icon-button" aria-pressed="false" title="Hide completed items" aria-label="Hide completed items" hidden><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 8.2l2 2 4-4.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button id="pin-note" class="icon-button" aria-pressed="false" title="Pin to top" aria-label="Pin to top">☆</button>
       <button id="info-button" class="icon-button" aria-expanded="false" aria-controls="info-panel" title="Note info" aria-label="Note info"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 7.2v4M8 4.9v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       <button id="trash-note" class="icon-button" title="Move to Trash" aria-label="Move to Trash"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 4.2h11M6.3 4.2V2.8h3.4v1.4M4 4.2l.7 9h6.6l.7-9M6.6 6.6v4.5M9.4 6.6v4.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button id="restore-note" class="text-button" hidden>Restore</button>
+      <button id="purge-note" class="text-button danger" hidden>Delete Permanently</button>
     </div>
     <form id="link-form" class="link-form" hidden>
       <label class="sr-only" for="link-input">Link address</label>
@@ -103,9 +107,9 @@
       <button type="button" id="link-remove" class="text-button">Remove Link</button>
     </form>
     <div id="info-panel" class="info-panel" role="dialog" aria-label="Note info" hidden><dl id="info-list"></dl></div>
-    <div id="update-banner" class="remote-change" hidden>TaskFlow Notes was updated. <button id="update-reload" class="link">Reload to get the new version</button></div>
+    <div id="update-banner" class="remote-change" hidden>{{APP}} Notes was updated. <button id="update-reload" class="link">Reload to get the new version</button></div>
     <div id="remote-change" class="remote-change" hidden>This note changed on another device. <button id="show-latest" class="link">Show the latest version</button></div>
-    <div id="empty-selection" class="empty"><img src="/notes/icons/icon-192.png" alt=""><p>Choose a note, or press <kbd>✎</kbd> to start one.</p></div>
+    <div id="empty-selection" class="empty"><img src="{{BASE}}icons/icon-192.png" alt=""><p>Choose a note, or press <kbd>✎</kbd> to start one.</p></div>
     <div id="editor" class="editor" hidden>
       <div class="note-meta">
         <label class="folder-field" title="Folder"><span aria-hidden="true">▱</span><span class="sr-only">Folder</span>
@@ -115,7 +119,12 @@
       </div>
       <label class="sr-only" for="note-title">Title</label>
       <textarea id="note-title" class="note-title" placeholder="Title" rows="1" autocomplete="off" spellcheck="true"></textarea>
+      <div id="format-lock" class="format-lock" hidden>
+        <span>This note has formatting from the {{APP}} app. Editing its text here replaces that formatting with Markdown.</span>
+        <button id="unlock-format" class="link">Edit Text Here</button>
+      </div>
       <div id="note-body" class="note-body"></div>
+      <p id="done-hidden" class="done-hidden" hidden><span id="done-hidden-text"></span> <button id="done-show" class="link">Show</button></p>
       <div class="tag-bar">
         <div id="tag-pills" class="tag-pills"></div>
         <label class="sr-only" for="tag-input">Add a tag</label>
@@ -128,6 +137,18 @@
   <div id="reauth" class="reauth" role="alert" hidden><p id="reauth-text"></p><div id="reauth-button" class="reauth-button"></div></div>
 </div>
 
+<dialog id="tag-dialog" aria-labelledby="tag-dialog-title">
+  <h2 id="tag-dialog-title">Tags</h2>
+  <p class="dialog-hint">Rename a tag to change it on every note. Renaming it to a tag that already exists merges the two.</p>
+  <div id="tag-manager" class="tag-manager"></div>
+  <p id="tag-dialog-status" class="dialog-status" role="status" aria-live="polite"></p>
+  <div class="dialog-actions"><button id="tag-dialog-done" class="primary">Done</button></div>
+</dialog>
+<dialog id="purge-dialog">
+  <h2 id="purge-title"></h2>
+  <p id="purge-text"></p>
+  <div class="dialog-actions"><button id="purge-confirm" class="danger-button">Delete Permanently</button><button id="purge-cancel" class="link">Cancel</button></div>
+</dialog>
 <dialog id="conflict-dialog">
   <h2>This note changed somewhere else</h2>
   <p>Your draft is safe. Choose which version to keep, or keep both as separate notes.</p>

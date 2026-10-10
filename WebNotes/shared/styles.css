@@ -1,5 +1,5 @@
-/* TaskFlow Notes on the web — a quiet three-pane layout: sidebar, list, editor.
-   Shared with Sebastian's web notes (Sebastian repo, WebNotes/styles.css).
+/* Web notes — a quiet three-pane layout: sidebar, list, editor. Shared by
+   Sebastian Notes and TaskFlow Notes; each app's theme.css sets its colours.
    Flat: solid fills and neutral lines, no gradients or glows. */
 :root {
   color-scheme: light;
@@ -69,9 +69,9 @@ kbd { font: inherit; font-size: .9em; border: 1px solid var(--line); border-radi
 .nav-icon { width: 18px; text-align: center; color: var(--muted); flex: none; }
 .nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .count { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.nav-heading { font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: var(--faint); margin: 18px 10px 4px; }
+.nav-heading { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: var(--faint); margin: 18px 10px 4px; }
 .tag-nav { display: grid; gap: 1px; }
-.heading-toggle { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; border-radius: 4px; }
+.heading-toggle { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; border: 0; background: none; padding: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; border-radius: 4px; }
 .heading-toggle:hover { background: none; color: var(--muted); }
 .chevron { display: inline-block; transition: transform .15s ease; }
 .heading-toggle[aria-expanded="false"] .chevron { transform: rotate(-90deg); }
@@ -146,7 +146,10 @@ kbd { font: inherit; font-size: .9em; border: 1px solid var(--line); border-radi
 .note-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 /* Folder and badges sit in one quiet row above the title. */
 .note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 8px; }
+/* Without folders, an empty row takes no space. */
+body:not(.has-folders) .note-meta:has(#note-badges[hidden]) { display: none; }
 .folder-field { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; border-radius: 7px; padding: 2px 8px 2px 6px; background: var(--sidebar); border: 1px solid transparent; }
+body:not(.has-folders) .folder-field { display: none; }
 .folder-field:focus-within { border-color: var(--line); }
 .folder-field input { border: 0; background: none; padding: 2px 0; font-size: 13px; width: 11em; outline: none; color: var(--ink); }
 .folder-field input::placeholder { color: var(--faint); }
@@ -155,6 +158,11 @@ kbd { font: inherit; font-size: .9em; border: 1px solid var(--line); border-radi
 .folder-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; line-height: 1.5; color: var(--muted); padding: 0 6px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .folder-chip::before { content: "▱"; font-size: 11px; }
 #trash-note:disabled { opacity: .35; cursor: not-allowed; }
+/* Checked items, hidden while "hide completed" is on. */
+.editor.hide-done .note-body .ql-editor li[data-list="checked"] { display: none; }
+.done-hidden { font-size: 12.5px; color: var(--muted); margin: 0 auto 10px; }
+.done-hidden .link { padding: 0 2px; }
+#hide-done[aria-pressed="true"] { color: var(--accent); }
 .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); background: var(--pill); border-radius: 999px; padding: 2px 9px; cursor: default; }
 .badge.trash { color: var(--danger); }
 .toast button { margin-left: 10px; border: 0; background: none; color: inherit; font-weight: 700; text-decoration: underline; padding: 0; }
@@ -198,6 +206,20 @@ body.open-links .note-body .ql-editor a { cursor: pointer; text-decoration: unde
 .reauth p { margin: 0 0 10px; font-size: 13.5px; }
 .reauth-button { display: flex; justify-content: center; min-height: 32px; }
 
+/* Tags heading's Edit button and the tag manager */
+.heading-action { border: 0; background: none; padding: 0 2px; font: inherit; font-size: 11px; letter-spacing: normal; text-transform: none; font-weight: 500; color: var(--faint); }
+.heading-action:hover { background: none; color: var(--accent); }
+.dialog-hint { font-size: 13px; color: var(--muted); margin-top: -4px; }
+.dialog-status { font-size: 12.5px; color: var(--muted); min-height: 18px; margin: 10px 0 0; }
+.tag-manager { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; margin-top: 8px; }
+.tag-row { display: flex; align-items: center; gap: 10px; padding: 4px 2px; }
+.tag-row .tag-dot::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--tag, var(--faint)); }
+.tag-row input { flex: 1; min-width: 0; border: 1px solid transparent; background: none; border-radius: 6px; padding: 4px 6px; font-size: 14px; }
+.tag-row input:hover { border-color: var(--line); }
+.tag-row input:focus { border-color: var(--accent); background: var(--bg); outline: none; }
+.tag-row .count { white-space: nowrap; }
+.tag-row .text-button { font-size: 12px; white-space: nowrap; }
+
 /* Conflict dialog */
 dialog { max-width: 760px; width: calc(100% - 32px); background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 24px; box-shadow: var(--shadow); }
 dialog::backdrop { background: rgba(0, 0, 0, .35); }
@@ -230,25 +252,4 @@ dialog h2 { margin-top: 0; font-size: 19px; }
   .editor-toolbar .icon-button { width: 30px; }
   .info-panel { right: 8px; top: 48px; }
   .conflict-columns { grid-template-columns: 1fr; }
-}
-
-/* TaskFlow's colours: navy in dark mode (as the earlier TaskFlow page had),
-   a light blue tint in light mode. Everything above is shared with
-   Sebastian's page; only these tokens differ. */
-:root {
-  --bg: #f5f9ff; --sidebar: #e8f0fb; --list: #eef4fd; --hover: #dde8f7; --selected: #d0e0f6;
-  --ink: #17243a; --muted: #5d6f87; --faint: #8a9ab0; --line: #d5e0ee; --pill: #dfe8f5;
-  --accent: #246bd8;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #111a26; --sidebar: #172230; --list: #142030; --hover: #1f2d3f; --selected: #233c5d;
-    --ink: #e5edf8; --muted: #a1b0c3; --faint: #6f8197; --line: #2b3a4c; --pill: #24344a;
-    --accent: #5699ff; --accent-ink: #081628;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #111a26; --sidebar: #172230; --list: #142030; --hover: #1f2d3f; --selected: #233c5d;
-  --ink: #e5edf8; --muted: #a1b0c3; --faint: #6f8197; --line: #2b3a4c; --pill: #24344a;
-  --accent: #5699ff; --accent-ink: #081628;
 }

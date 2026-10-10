@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {CloudNotesProvider, DemoNotesProvider, NoteConflict, newNote, noteFromRecord, recordForNote, visibleNotes, safeLink, isDeleted, isPinned,
   canTrash, markdownBody, tagColor, tagColorsFromMetadata, folderStats, check, needsSignIn} from '../core.mjs';
-import {markdownToDelta, deltaToMarkdown} from '../rich-text.mjs';
+import {markdownToDelta, deltaToMarkdown} from '../shared/rich-text.mjs';
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 
 const ID = '6F1C2B9E-6D7A-4E5B-9C3D-1A2B3C4D5E6F';
@@ -87,8 +87,10 @@ test('malformed and mismatched records are rejected, and one bad record hides no
   assert.throws(() => noteFromRecord(appRecord({format: 'fancy'})));
   assert.throws(() => noteFromRecord(appRecord({text: 5})));
   assert.throws(() => recordForNote({...newNote(), body: 'x'.repeat(600_001)}), {code: 'TOO_LARGE'});
-  const broken = appRecord(); broken.fields.payload.value = '{';
-  const provider = new CloudNotesProvider({privateCloudDatabase: {performQuery: async () => ({records: [broken, appRecord()]}), fetchRecords: async () => ({records: []})}});
+  const broken = appRecord(); broken.recordName = 'TaskFlowWebNote-BROKEN'; broken.fields.payload.value = '{';
+  const records = [broken, appRecord()];
+  const provider = new CloudNotesProvider({privateCloudDatabase: {performQuery: async () => ({records}),
+    fetchRecords: async names => ({records: [names].flat().map(name => records.find(record => record.recordName === name)).filter(Boolean)})}});
   assert.equal((await provider.list()).length, 1);
 });
 
@@ -139,4 +141,12 @@ test('the page waits for the app to enable browser access', async () => {
 
 test('links in notes are limited to web and email addresses', () => {
   assert.equal(safeLink('javascript:alert(1)'), null); assert.equal(safeLink('https://example.com'), 'https://example.com/');
+});
+
+test('badges and the shared exports this page leaves unused', async () => {
+  const {noteBadges, isPurged, purgedNote} = await import('../core.mjs');
+  const texts = noteBadges(noteFromRecord(appRecord({}, {hasDrawing: 1}))).map(([text]) => text);
+  assert.deepEqual(texts, ['✎ Drawing', '✓ Resolved', 'Linked to a task']);
+  assert.equal(isPurged(noteFromRecord(appRecord({}, {isDeleted: 1}))), false, 'no permanent delete here');
+  assert.throws(() => purgedNote(), {code: 'UNSUPPORTED'});
 });

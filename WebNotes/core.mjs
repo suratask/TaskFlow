@@ -5,14 +5,16 @@
 // app's `QuickNote` JSON without its drawing and history (see CloudWebNote in
 // CloudNotesSyncService.swift); `isDeleted` and `hasDrawing` are record fields.
 //
-// The page works with the same note shape as Sebastian's web notes, so the
-// two pages share their UI code:
+// The page itself (shared/) is shared with Sebastian's web notes; each app's
+// core.mjs provides the same exports, mapping its records to one note shape:
 //   body       the text as Markdown for the editor (from `text` + `format`)
 //   pinnedAt   set when `isPinned`
 //   deletedAt  set when the record's `isDeleted` is 1
 //   modifiedAt the record's last save
 // recordForNote() maps them back. A note whose text wasn't edited keeps its
 // original `text` and `format` byte for byte.
+import {queryAll} from './shared/records.mjs';
+
 export const recordType = 'TaskFlowWebNote';
 export const readinessRecordName = 'TaskFlowWebNotesReady';
 export const MAX_BYTES = 600_000;
@@ -93,6 +95,21 @@ export const isPinned = note => Boolean(note.pinnedAt);
 /// The app drops a note's drawing along with the note when it's trashed from
 /// the web, so drawing notes are moved to Trash in the app only.
 export const canTrash = note => !note.hasDrawing;
+/// No permanent delete on this page: the app uploads its copy again when a
+/// record disappears, so a deleted note would come back. (profile.json turns
+/// the page's permanent-delete feature off; these keep the shared exports.)
+export const isPurged = () => false;
+export function purgedNote() { throw new SyncError('Delete notes permanently in the TaskFlow app.', 'UNSUPPORTED'); }
+
+/// Labels above the title for what the page can't show or change.
+export function noteBadges(note) {
+  const badges = [];
+  if (note.hasDrawing) badges.push(['✎ Drawing', 'This note has a drawing. It stays in the TaskFlow app, and edits here keep it.']);
+  if (note.isResolved) badges.push(['✓ Resolved', 'Marked resolved in the TaskFlow app.']);
+  if (note.linkedTaskID) badges.push(['Linked to a task', 'This note is linked to a task in the TaskFlow app.']);
+  if (note.linkedEventID) badges.push(['Linked to an event', 'This note is linked to a calendar event in the TaskFlow app.']);
+  return badges;
+}
 
 /// A note's text as it reads, for the list: Markdown markers gone, checkboxes
 /// as boxes, lines run together.
@@ -251,7 +268,7 @@ export function check(response) {
 
 const TAG_COLORS_INTERVAL = 10 * 60_000;
 export class CloudNotesProvider {
-  constructor(container) { this.container = container; this.database = container.privateCloudDatabase; this.tagColors = {}; this.tagColorsAt = 0; }
+  constructor(container) { this.container = container; this.database = container.privateCloudDatabase; this.tagColors = {}; this.tagColorsAt = 0; this.cache = new Map(); }
   /// The app publishes the readiness record once it has synced its notes.
   async connect() {
     const user = await this.container.setUpAuth();
@@ -262,16 +279,10 @@ export class CloudNotesProvider {
     if (response.records?.[0]?.fields?.schemaVersion?.value !== 1) throw new Error(NOT_READY);
     return user;
   }
+  /// Only notes that are new or changed since the last sync are downloaded
+  /// in full (see shared/records.mjs).
   async list() {
-    let response = check(await this.database.performQuery({recordType}));
-    const records = [...(response.records ?? [])];
-    const seen = new Set();
-    while (response.moreComing) {
-      if (!response.continuationMarker || seen.has(response.continuationMarker)) throw new Error('iCloud returned an incomplete notes list. Please refresh to try again.');
-      seen.add(response.continuationMarker);
-      response = check(await this.database.performQuery(response));
-      records.push(...(response.records ?? []));
-    }
+    const records = await queryAll(this.database, recordType, this.cache, check);
     await this.refreshTagColors();
     // One unreadable record must not hide every other note.
     return records.flatMap(record => { try { return [noteFromRecord(record)]; } catch { return []; } });
@@ -290,13 +301,14 @@ export class CloudNotesProvider {
   async save(note) {
     const response = check(await this.database.saveRecords(recordForNote(note)));
     if (!response.records?.[0]) throw new Error('iCloud did not confirm this save. Your draft is still here.');
+    this.cache.set(response.records[0].recordName, response.records[0]);
     return noteFromRecord(response.records[0]);
   }
   async latest(id) {
     const response = check(await this.database.fetchRecords(recordName(id)));
     return noteFromRecord(response.records[0]);
   }
-  async signOut() { await this.container.signOut(); }
+  async signOut() { this.cache.clear(); await this.container.signOut(); }
 }
 
 /// Sample notes held in this tab only, for trying the page without iCloud.

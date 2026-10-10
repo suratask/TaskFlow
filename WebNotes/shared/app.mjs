@@ -1,8 +1,9 @@
-// TaskFlow Notes on the web — the page. Records, validation and iCloud live
-// in core.mjs; this file is the three-pane UI. It's Sebastian's web notes page
-// (Sebastian repo, WebNotes/app.mjs) with TaskFlow's folders, drawing notes,
-// resolved and linked badges, and no permanent delete (the app would restore
-// a note removed from iCloud).
+// Web notes — the page, shared by Sebastian Notes and TaskFlow Notes.
+// Source of truth: Sebastian repo, WebNotes/shared/ (TaskFlow keeps a copy;
+// see WebNotes/README.md). Each app's core.mjs provides the records and
+// iCloud provider behind the same exports, and its profile.json (served in
+// config.js) names the app and turns features on: folders, permanent delete,
+// and the lock on text formatted in the app.
 //
 // Stability rules:
 // - Background sync never replaces the open note while it is being edited.
@@ -12,10 +13,13 @@
 //   confirms it, so even a crash or a closed tab doesn't lose it, and a failed
 //   save is retried until it lands. Hiding or closing the tab saves at once.
 // - The list holds its order while a note is being edited.
-import {CloudNotesProvider, DemoNotesProvider, NoteConflict, newNote, visibleNotes, isDeleted, isPinned, canTrash, plainPreview, safeLink, needsSignIn, tagColor, tagStats, frequentTags, folderStats} from './core.mjs';
+import {CloudNotesProvider, DemoNotesProvider, NoteConflict, newNote, visibleNotes, isDeleted, isPinned, canTrash, plainPreview, safeLink, needsSignIn,
+  isPurged, purgedNote, tagColor, tagStats, frequentTags, folderStats, noteBadges} from '../core.mjs';
+import {markdownToDelta, deltaToMarkdown, URL_PATTERN, linkTarget} from './rich-text.mjs';
 /// A tag's colour: the one chosen in the app, else the app's default for it.
 const colorOf = tag => tagColor(tag, provider?.tagColors);
-import {markdownToDelta, deltaToMarkdown, URL_PATTERN, linkTarget} from './rich-text.mjs';
+const profile = window.NOTES_CONFIG?.profile ?? {}, features = profile.features ?? {};
+const APP = profile.appName ?? 'Notes', STORE = profile.storagePrefix ?? 'Notes.';
 
 const $ = id => document.getElementById(id);
 const SAVE_DELAY = 1000, REFRESH_INTERVAL = 45_000, EDITING_GRACE = 20_000;
@@ -52,8 +56,8 @@ const syncedText = () => isDemo() ? 'Sample notes · nothing is sent to iCloud' 
 /// Each backup records which tab wrote it. A tab marks itself alive every few
 /// seconds, so a new tab leaves alone the backups of one still open (it will
 /// save them itself) and recovers those of a tab that closed or crashed.
-const prefix = 'TaskFlow.notes.backup.';
-const TAB_ID = crypto.randomUUID(), TAB_PREFIX = 'TaskFlow.notes.tab.', TAB_ALIVE = 30_000, BACKUP_LIFETIME = 30 * 86_400_000;
+const prefix = STORE + 'backup.';
+const TAB_ID = crypto.randomUUID(), TAB_PREFIX = STORE + 'tab.', TAB_ALIVE = 30_000, BACKUP_LIFETIME = 30 * 86_400_000;
 const draftKey = id => prefix + encodeURIComponent(account) + '.' + id;
 const storage = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
@@ -93,6 +97,7 @@ async function recoverBackups(currentSession) {
   for (const backup of orphanedBackups()) {
     const current = notes.find(note => note.id === backup.id);
     if (current && sameContent(current, backup)) { clearStash(backup.id); continue; }
+    dropLegacySession();
     try {
       const saved = await provider.save(backup);
       if (session !== currentSession) return;
@@ -121,7 +126,7 @@ function liveTags() {
   for (const note of notes) if (!isDeleted(note)) for (const tag of note.tags) counts.set(tag, (counts.get(tag) || 0) + 1);
   return [...counts].sort(([a], [b]) => a.localeCompare(b, undefined, {sensitivity: 'base'}));
 }
-const sortKey = 'TaskFlow.notes.sort';
+const sortKey = STORE + 'sort';
 let sortBy = storage.get(sortKey) || 'modified';
 $('sort-select').value = sortBy;
 $('sort-select').onchange = () => { sortBy = $('sort-select').value; storage.set(sortKey, sortBy); orderLock = null; scheduleRender(); };
@@ -157,7 +162,7 @@ function navButton(label, count, current, onClick) {
 function renderSidebar() {
   const live = notes.filter(note => !isDeleted(note));
   $('count-all').textContent = live.length;
-  $('count-trash').textContent = notes.length - live.length || '';
+  $('count-trash').textContent = notes.filter(note => isDeleted(note) && !isPurged(note)).length || '';
   $('count-untagged').textContent = live.filter(note => !note.tags.length).length;
   for (const item of document.querySelectorAll('.nav-item[data-view]')) {
     if (item.dataset.view === view.kind) item.setAttribute('aria-current', 'true'); else item.removeAttribute('aria-current');
@@ -165,7 +170,7 @@ function renderSidebar() {
   renderFolders(); renderTags();
 }
 
-// MARK: - Folders in the sidebar
+// MARK: - Folders in the sidebar (profile feature "folders")
 
 const folderButton = ({folder, count}) => {
   const button = navButton(folder, count, view.kind === 'folder' && view.folder === folder, () => showView({kind: 'folder', tag: '', folder}));
@@ -173,7 +178,7 @@ const folderButton = ({folder, count}) => {
   return button;
 };
 function renderFolders() {
-  const stats = folderStats(notes);
+  const stats = features.folders ? folderStats(notes) : [];
   $('folders-section').hidden = !stats.length;
   $('folder-suggestions').replaceChildren(...stats.map(({folder}) => new Option(folder)));
   const open = !sidebarState.foldersClosed;
@@ -186,7 +191,7 @@ $('folders-toggle').onclick = () => { sidebarState.foldersClosed = !sidebarState
 
 /// Up to eight tags are simply listed. Past that, the most used and recently
 /// used stay in view and the rest fold into "All Tags", which has a filter.
-const FOLD_AFTER = 8, FREQUENT = 6, sidebarKey = 'TaskFlow.notes.sidebar';
+const FOLD_AFTER = 8, FREQUENT = 6, sidebarKey = STORE + 'sidebar';
 let sidebarState = {};
 try { sidebarState = JSON.parse(storage.get(sidebarKey)) ?? {}; } catch { /* Defaults: tags open, All Tags closed. */ }
 function saveSidebarState() { storage.set(sidebarKey, JSON.stringify(sidebarState)); }
@@ -292,6 +297,7 @@ function renderList() {
   shownOrder = listed.map(note => note.id);
   const names = {all: 'All Notes', trash: 'Trash', untagged: 'Untagged Notes', tag: '#' + view.tag, folder: view.folder};
   $('list-title').textContent = `${names[view.kind]} · ${listed.length} ${listed.length === 1 ? 'note' : 'notes'}`;
+  $('empty-trash').hidden = view.kind !== 'trash' || !listed.length || !features.permanentDelete;
   const list = $('note-list'), scroll = list.scrollTop;
   list.replaceChildren(...listed.map(note => {
     const {title, preview} = cardText(note);
@@ -303,7 +309,7 @@ function renderList() {
     const body = document.createElement('span'); body.className = 'note-card-preview'; body.textContent = preview || ' ';
     const date = document.createElement('span'); date.className = 'note-card-date'; date.textContent = relativeDate(note.modifiedAt ?? note.createdAt);
     card.append(heading, body);
-    if (note.tags.length || note.folder) card.append(cardTags(note.tags, note.folder));
+    if (note.tags.length || (features.folders && note.folder)) card.append(cardTags(note.tags, features.folders ? note.folder : ''));
     card.append(date);
     card.addEventListener('click', () => selectNote(note.id));
     return card;
@@ -343,32 +349,43 @@ function renderTagPills() {
     return pill;
   }));
 }
+/// Notes whose text was unlocked with "Edit Text Here" in this tab.
+const unlockedFormatting = new Set();
+/// The app's formatting lives on the device. Editing the text here saves it as
+/// Markdown, which the app then shows in place of it, so the text of such a
+/// note stays locked until asked. The title, tags, pin and Trash keep it.
+const bodyLocked = () => Boolean(features.formattingLock) && Boolean(draft) && !isDeleted(draft) && draft.hasRichText && draft.body === draft.originalBody && !unlockedFormatting.has(draft.id);
+$('unlock-format').onclick = () => {
+  if (!draft) return;
+  unlockedFormatting.add(draft.id); renderNoteState();
+  rich.focus();
+};
 function renderNoteState() {
   if (!draft) return;
-  const trashed = isDeleted(draft);
+  const trashed = isDeleted(draft), locked = bodyLocked();
   $('pin-note').setAttribute('aria-pressed', String(isPinned(draft)));
   $('pin-note').textContent = isPinned(draft) ? '★' : '☆';
   $('pin-note').title = isPinned(draft) ? 'Unpin' : 'Pin to top';
   // A note in Trash is read-only until it's restored.
   document.querySelector('.editor-pane').classList.toggle('in-trash', trashed);
   $('restore-note').hidden = !trashed;
-  // Trashing a drawing note from the web would lose the drawing in the app.
+  $('purge-note').hidden = !trashed || !features.permanentDelete;
+  // TaskFlow: trashing a drawing note from the web would lose the drawing.
   $('trash-note').disabled = !canTrash(draft);
-  $('trash-note').title = canTrash(draft) ? 'Move to Trash' : 'Move drawing notes to Trash in the TaskFlow app, so the drawing isn’t lost';
-  if (rich.isEnabled() === trashed) rich.enable(!trashed);
+  $('trash-note').title = canTrash(draft) ? 'Move to Trash' : `Move drawing notes to Trash in the ${APP} app, so the drawing isn’t lost`;
+  document.querySelector('.editor-pane').classList.toggle('body-locked', locked);
+  $('format-lock').hidden = !locked;
+  if (rich.isEnabled() === (trashed || locked)) rich.enable(!(trashed || locked));
   $('note-title').readOnly = trashed; $('note-folder').disabled = trashed;
-  renderBadges(); renderInfo();
+  renderBadges(); renderInfo(); renderDone();
 }
 /// Small labels above the title for what the page can't show or change.
 function renderBadges() {
   const badges = [];
   if (isDeleted(draft)) badges.push(['In Trash', 'Restore this note to edit it.', 'trash']);
-  if (draft.hasDrawing) badges.push(['✎ Drawing', 'This note has a drawing. It stays in the TaskFlow app, and edits here keep it.']);
-  if (draft.isResolved) badges.push(['✓ Resolved', 'Marked resolved in the TaskFlow app.']);
-  if (draft.linkedTaskID) badges.push(['Linked to a task', 'This note is linked to a task in the TaskFlow app.']);
-  if (draft.linkedEventID) badges.push(['Linked to an event', 'This note is linked to a calendar event in the TaskFlow app.']);
+  badges.push(...noteBadges(draft, {locked: bodyLocked()}));
   const files = draft.attachments?.length ?? 0;
-  if (files) badges.push([`📎 ${files} ${files === 1 ? 'attachment' : 'attachments'}`, 'Attachments stay in the TaskFlow app, and edits here keep them.']);
+  if (files) badges.push([`📎 ${files} ${files === 1 ? 'attachment' : 'attachments'}`, `Attachments stay in the ${APP} app, and edits here keep them.`]);
   $('note-badges').replaceChildren(...badges.map(([text, title, kind]) => {
     const badge = document.createElement('span'); badge.className = 'badge' + (kind ? ' ' + kind : '');
     badge.textContent = text; badge.title = title; badge.tabIndex = 0; badge.setAttribute('aria-label', `${text}. ${title}`);
@@ -401,7 +418,7 @@ function renderInfo() {
     ['Saved from', savedFrom(draft)],
     ['Words', words.toLocaleString()],
     ['Characters', (title.length + text.length).toLocaleString()],
-    ['Folder', draft.folder || 'None'],
+    ...(features.folders ? [['Folder', draft.folder || 'None']] : []),
     ['Tags', draft.tags.length ? draft.tags.join(', ') : 'None']
   ];
   if (draft.attachments?.length) rows.push(['Attachments', String(draft.attachments.length)]);
@@ -439,7 +456,7 @@ function openNote(note, {recovered = false} = {}) {
 }
 function closeEditor() {
   draft = null; dirty = false; pendingRemote = null; orderLock = null; closeLinkBar(false); setInfoOpen(false);
-  document.querySelector('.editor-pane').classList.remove('in-trash');
+  document.querySelector('.editor-pane').classList.remove('in-trash', 'body-locked'); $('format-lock').hidden = true;
   $('editor').hidden = true; $('empty-selection').hidden = false; $('remote-change').hidden = true;
   document.querySelector('.editor-pane').classList.remove('has-note');
   $('workspace').classList.remove('show-editor');
@@ -481,11 +498,11 @@ $('note-title').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); rich.focus(); rich.setSelection(0, 0, 'silent'); }
 });
 
-// MARK: - Folder
+// MARK: - Folder (profile feature "folders")
 
 /// Typing or choosing a folder files the note there; clearing it unfiles it.
 function commitFolder() {
-  if (!draft || isDeleted(draft)) return;
+  if (!features.folders || !draft || isDeleted(draft)) return;
   const folder = $('note-folder').value.replace(/\s+/g, ' ').trim().slice(0, 60);
   $('note-folder').value = folder;
   if (folder === (draft.folder ?? '')) return;
@@ -525,6 +542,93 @@ $('tag-input').addEventListener('input', event => {
 });
 $('tag-input').addEventListener('blur', () => { const input = $('tag-input'); if (input.value.trim()) { addTag(input.value); input.value = ''; } });
 
+// MARK: - Managing tags
+
+/// Rename, merge or remove a tag on every note. Renaming to a tag that already
+/// exists (ignoring capitals) merges into that spelling. Each note is saved on
+/// its own through the provider, so a conflict or failure affects only that
+/// note and is reported.
+let tagWork = false;
+function tagCounts() {
+  const counts = new Map();
+  for (const note of notes) if (!isPurged(note)) for (const tag of note.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  return [...counts].sort(([a], [b]) => a.localeCompare(b, undefined, {sensitivity: 'base'}));
+}
+function renderTagManager() {
+  const rows = tagCounts().map(([tag, count]) => {
+    const row = document.createElement('div'); row.className = 'tag-row';
+    const dot = document.createElement('span'); dot.className = 'tag-dot'; dot.style.setProperty('--tag', colorOf(tag)); dot.setAttribute('aria-hidden', 'true');
+    const input = document.createElement('input'); input.value = tag; input.setAttribute('aria-label', `Rename tag ${tag}`); input.disabled = tagWork; input.autocomplete = 'off';
+    const commit = () => { if (cleanTag(input.value) !== tag) renameTagEverywhere(tag, input.value); else input.value = tag; };
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); commit(); }
+      else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); input.value = tag; }
+    });
+    input.addEventListener('blur', commit);
+    const used = document.createElement('span'); used.className = 'count'; used.textContent = `${count} ${count === 1 ? 'note' : 'notes'}`;
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button danger'; remove.textContent = 'Remove'; remove.disabled = tagWork;
+    // A second press confirms, so a stray click can't strip a tag from every note.
+    remove.onclick = () => {
+      if (remove.dataset.armed) { removeTagEverywhere(tag); return; }
+      remove.dataset.armed = '1'; remove.textContent = `Remove from ${count} ${count === 1 ? 'note' : 'notes'}?`;
+      setTimeout(() => { if (remove.isConnected) { delete remove.dataset.armed; remove.textContent = 'Remove'; } }, 4000);
+    };
+    row.append(dot, input, used, remove);
+    return row;
+  });
+  const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = 'No tags yet.';
+  $('tag-manager').replaceChildren(...(rows.length ? rows : [empty]));
+}
+function openTagManager() {
+  if (!provider) return;
+  $('tag-dialog-status').textContent = ''; $('tag-dialog-status').classList.remove('error');
+  renderTagManager(); $('tag-dialog').showModal();
+}
+$('tags-edit').onclick = openTagManager;
+$('tag-dialog-done').onclick = () => $('tag-dialog').close();
+async function renameTagEverywhere(from, raw) {
+  const wanted = cleanTag(raw);
+  if (!wanted) { renderTagManager(); return; }
+  const into = tagCounts().map(([tag]) => tag).find(tag => tag !== from && tag.toLocaleLowerCase() === wanted.toLocaleLowerCase()) ?? wanted;
+  const merging = into !== wanted || tagCounts().some(([tag]) => tag === into && tag !== from);
+  await retagNotes(from, tags => [...new Set(tags.map(tag => tag === from ? into : tag))],
+    merging ? `Merged #${from} into #${into} on` : `Renamed #${from} to #${into} on`, into);
+}
+async function removeTagEverywhere(from) {
+  await retagNotes(from, tags => tags.filter(tag => tag !== from), `Removed #${from} from`, null);
+}
+async function retagNotes(from, transform, doneText, renamedTo) {
+  if (!provider || tagWork) return;
+  if (conflict || (dirty && !await flush())) { $('tag-dialog-status').textContent = 'Save or resolve the open note first.'; return; }
+  const currentSession = session;
+  const targets = notes.filter(note => !isPurged(note) && note.tags.includes(from));
+  tagWork = true; renderTagManager();
+  $('tag-dialog-status').classList.remove('error');
+  let done = 0, failed = 0;
+  for (const note of targets) {
+    $('tag-dialog-status').textContent = `${doneText.split(' ')[0].replace(/ed$/, 'ing')}… ${done + failed + 1} of ${targets.length}`;
+    dropLegacySession();
+    try {
+      const saved = await provider.save({...note, tags: transform(note.tags)});
+      if (session !== currentSession) return;
+      upsert(saved); done++;
+      // The open note takes the new tags and the version just saved.
+      if (draft?.id === note.id && !dirty) { draft.tags = saved.tags; draft.record = saved.record; draft.modifiedAt = saved.modifiedAt; renderTagPills(); }
+    } catch (error) {
+      if (session !== currentSession) return;
+      failed++;
+      if (needsSignIn(error)) { showReauth(); break; }
+    }
+  }
+  tagWork = false;
+  if (view.kind === 'tag' && view.tag === from) view = renamedTo ? {kind: 'tag', tag: renamedTo, folder: ''} : {kind: 'all', tag: '', folder: ''};
+  scheduleRender(); renderTagManager();
+  $('tag-dialog-status').textContent = failed
+    ? `${doneText} ${done} ${done === 1 ? 'note' : 'notes'}; ${failed} couldn’t be saved (sync and try again).`
+    : `${doneText} ${done} ${done === 1 ? 'note' : 'notes'}.`;
+  $('tag-dialog-status').classList.toggle('error', failed > 0);
+}
+
 // MARK: - Formatting
 
 function updateFormatState() {
@@ -552,6 +656,27 @@ for (const button of document.querySelectorAll('[data-format]')) {
   });
 }
 
+// MARK: - Completed checklist items
+
+/// Checked items can be hidden while reading or working through a list. The
+/// choice is this browser's, for every note; the text itself is untouched.
+const hideDoneKey = STORE + 'hideDone';
+let hideDone = storage.get(hideDoneKey) === '1';
+function renderDone() {
+  if (!draft) return;
+  const done = (draft.body.match(/^\s*[-*+]\s+\[[xX]\]/gm) ?? []).length;
+  const hiding = hideDone && done > 0;
+  $('hide-done').hidden = !done;
+  $('hide-done').setAttribute('aria-pressed', String(hiding));
+  $('hide-done').title = $('hide-done').ariaLabel = hiding ? 'Show completed items' : `Hide ${done} completed ${done === 1 ? 'item' : 'items'}`;
+  $('editor').classList.toggle('hide-done', hiding);
+  $('done-hidden').hidden = !hiding;
+  $('done-hidden-text').textContent = `${done} completed ${done === 1 ? 'item' : 'items'} hidden.`;
+}
+function setHideDone(value) { hideDone = value; storage.set(hideDoneKey, value ? '1' : '0'); renderDone(); }
+$('hide-done').onclick = () => setHideDone(!hideDone);
+$('done-show').onclick = () => setHideDone(false);
+
 // MARK: - Links
 
 /// The link run around a position, so a cursor inside a link edits all of it.
@@ -566,7 +691,7 @@ function linkExtent(index) {
 }
 let linkRange = null;
 function openLinkBar() {
-  if (!draft || isDeleted(draft)) return;
+  if (!draft || isDeleted(draft) || bodyLocked()) return;
   const range = rich.getSelection(true);
   linkRange = range.length ? range : linkExtent(range.index) ?? range;
   const current = linkRange.length ? rich.getFormat(linkRange).link : null;
@@ -625,7 +750,7 @@ window.addEventListener('blur', () => document.body.classList.remove('open-links
 
 // MARK: - Images and files
 
-const IMAGE_MESSAGE = 'Images can’t be added on the web yet. Add them to this note in the TaskFlow app.';
+const IMAGE_MESSAGE = `Images can’t be added on the web yet. Add them to this note in the ${APP} app.`;
 let toastTimer;
 /// A short message at the bottom; with `action`, a button such as Undo.
 function showToast(text, action = null) {
@@ -650,7 +775,7 @@ document.addEventListener('dragover', event => { if (carriesFiles(event)) event.
 document.addEventListener('drop', event => {
   if (!carriesFiles(event)) return;
   event.preventDefault(); event.stopPropagation();
-  if (draft) showToast(carriesImage(event.dataTransfer) ? IMAGE_MESSAGE : 'Files can’t be added on the web yet. Add them in the TaskFlow app.');
+  if (draft) showToast(carriesImage(event.dataTransfer) ? IMAGE_MESSAGE : `Files can’t be added on the web yet. Add them in the ${APP} app.`);
 }, true);
 
 // MARK: - Saving
@@ -665,6 +790,7 @@ async function flush() {
     while (dirty && draft) {
       const captured = structuredClone(draft), capturedRevision = revision;
       setSaveState('Saving…');
+      dropLegacySession();
       try {
         const saved = await currentProvider.save(captured);
         if (session !== currentSession) return false;
@@ -709,6 +835,7 @@ function scheduleRetry(error) {
 }
 async function showConflict(id, currentSession, currentProvider) {
   try {
+    dropLegacySession();
     const remote = await currentProvider.latest(id);
     if (session !== currentSession) return;
     conflict = {local: structuredClone(draft), remote};
@@ -746,14 +873,14 @@ $('conflict-cancel').onclick = () => $('conflict-dialog').close();
 /// A tab left open keeps running the code it loaded. Each sync checks the
 /// deployed version; an idle tab reloads (reopening its note), and a busy one
 /// says so and reloads when asked.
-const reopenKey = 'TaskFlow.notes.reopen';
+const reopenKey = STORE + 'reopen';
 let updateReady = false;
 async function checkForUpdate() {
-  const loaded = window.TASKFLOW_NOTES_CONFIG?.version;
+  const loaded = window.NOTES_CONFIG?.version;
   if (!loaded) return;
   if (!updateReady) {
     try {
-      const response = await fetch('/notes/version.json', {cache: 'no-store'});
+      const response = await fetch((profile.base ?? '/') + 'version.json', {cache: 'no-store'});
       const {version} = response.ok ? await response.json() : {};
       updateReady = Boolean(version) && version !== loaded;
     } catch { return; }
@@ -777,6 +904,7 @@ async function refresh({manual = false} = {}) {
   refreshing = true;
   const currentSession = session, currentProvider = provider, currentRevision = revision;
   if (manual) setSyncStatus('Syncing…');
+  dropLegacySession();
   try {
     const fetched = await currentProvider.list();
     // Anything typed or opened while the request was out wins over its result.
@@ -787,7 +915,8 @@ async function refresh({manual = false} = {}) {
       const remote = notes.find(note => note.id === draft.id);
       if (!remote) upsert(draft);
       else if (remote.record?.recordChangeTag !== draft.record?.recordChangeTag) {
-        if (isEditing()) { upsert(draft); pendingRemote = remote; $('remote-change').hidden = false; }
+        if (isPurged(remote) && !dirty) closeEditor();
+        else if (isEditing()) { upsert(draft); pendingRemote = remote; $('remote-change').hidden = false; }
         else openNote(remote);
       }
     }
@@ -839,8 +968,9 @@ $('trash-note').onclick = async () => {
 };
 async function undoTrash(id) {
   const note = notes.find(item => item.id === id);
-  if (!provider || !note || !isDeleted(note)) return;
+  if (!provider || !note || !isDeleted(note) || isPurged(note)) return;
   if (dirty && !await flush()) return;
+  dropLegacySession();
   try {
     const saved = await provider.save({...note, deletedAt: null});
     upsert(saved);
@@ -857,10 +987,49 @@ $('restore-note').onclick = async () => {
   changed(); renderNoteState();
   if (await flush()) showToast('Restored to All Notes.');
 };
+let purgeTargets = [];
+function confirmPurge(targets) {
+  if (!targets.length) return;
+  purgeTargets = targets;
+  const one = targets.length === 1;
+  $('purge-title').textContent = one ? `Delete “${cardText(targets[0]).title}” permanently?` : `Delete ${targets.length} notes permanently?`;
+  $('purge-text').textContent = `${one ? 'It’s' : 'They’re'} removed from ${APP} on all your devices and the web. This can’t be undone.`;
+  $('purge-dialog').showModal();
+}
+$('purge-note').onclick = () => { if (draft && isDeleted(draft)) confirmPurge([notes.find(note => note.id === draft.id) ?? draft]); };
+$('empty-trash').onclick = () => confirmPurge(notes.filter(note => isDeleted(note) && !isPurged(note)));
+$('purge-cancel').onclick = () => $('purge-dialog').close();
+$('purge-confirm').onclick = async () => { $('purge-dialog').close(); await purgeNotes(purgeTargets); purgeTargets = []; };
+/// Saves each note as an empty, purged tombstone (see `purgedNote`). A note
+/// that changed elsewhere in the meantime is left alone for this round.
+async function purgeNotes(targets) {
+  if (!provider || !targets.length) return;
+  if (dirty && !await flush()) return;
+  const currentSession = session;
+  setSyncStatus('Deleting…');
+  let deleted = 0, failed = 0;
+  for (const note of targets) {
+    dropLegacySession();
+    try {
+      const saved = await provider.save(purgedNote(note));
+      if (session !== currentSession) return;
+      upsert(saved); clearStash(note.id); deleted++;
+      if (draft?.id === note.id) closeEditor();
+    } catch (error) {
+      if (session !== currentSession) return;
+      failed++;
+      if (needsSignIn(error)) { showReauth(); break; }
+    }
+  }
+  scheduleRender();
+  if (failed) setSyncStatus(`${failed} ${failed === 1 ? 'note' : 'notes'} couldn’t be deleted. Sync and try again.`, true);
+  else setSyncStatus(syncedText());
+  if (deleted) showToast(deleted === 1 ? 'Deleted permanently.' : `${deleted} notes deleted permanently.`);
+}
 $('download-draft').onclick = () => {
   if (!draft) return;
   const url = URL.createObjectURL(new Blob([(draft.title ? '# ' + draft.title + '\n\n' : '') + draft.body], {type: 'text/markdown'}));
-  const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'TaskFlow note.md'; anchor.click();
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${APP} note.md`; anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 $('search').addEventListener('input', () => { orderLock = null; suggestionIndex = 0; scheduleRender(); renderSuggestions(); });
@@ -872,14 +1041,14 @@ $('back').onclick = () => { if (dirty) flush(); $('workspace').classList.remove(
 function closeSidebar() { $('workspace').classList.remove('sidebar-open'); $('scrim').hidden = true; }
 $('sidebar-toggle').onclick = () => { $('workspace').classList.add('sidebar-open'); $('scrim').hidden = false; };
 $('scrim').onclick = closeSidebar;
-const themeKey = 'TaskFlow.notes.theme';
+const themeKey = STORE + 'theme';
 function readTheme() { try { return localStorage.getItem(themeKey); } catch { return null; } }
 const isDark = () => { const saved = readTheme(); return saved === 'dark' || (!saved && matchMedia('(prefers-color-scheme: dark)').matches); };
 function applyTheme() {
   const saved = readTheme();
   if (saved) document.documentElement.dataset.theme = saved; else delete document.documentElement.dataset.theme;
   $('theme-toggle').textContent = isDark() ? '☀' : '◐';
-  document.querySelector('meta[name="theme-color"]').content = isDark() ? '#111a26' : '#e8f0fb';
+  document.querySelector('meta[name="theme-color"]').content = isDark() ? profile.themeColors?.dark ?? '#1c1c1e' : profile.themeColors?.light ?? '#f6f6f7';
 }
 $('theme-toggle').onclick = () => {
   try { localStorage.setItem(themeKey, isDark() ? 'light' : 'dark'); } catch { /* Private browsing keeps the system look. */ }
@@ -925,7 +1094,7 @@ async function initializeWorkspace(user, currentSession) {
   // After an update reload, the note that was open opens again.
   let reopen = null;
   try { reopen = sessionStorage.getItem(reopenKey); } catch { /* Nothing to reopen. */ }
-  const previous = !draft && reopen && notes.find(note => note.id === reopen);
+  const previous = !draft && reopen && notes.find(note => note.id === reopen && !isPurged(note));
   if (previous) openNote(previous);
   checkForUpdate();
 }
@@ -936,6 +1105,15 @@ async function loadCloudKit() {
     script.onload = resolve; script.onerror = () => reject(new Error('Apple sign-in couldn’t load. Check your connection and try again.'));
     document.head.append(script);
   });
+}
+/// A second copy of CloudKit's session cookie on another path makes every
+/// request fail ("Could not read or write ckSession"). An older version of
+/// Sebastian's page at /sebastian/notes kept its copy on /sebastian, and a tab
+/// still open on it writes it back, so that copy (profile.legacyCookiePath) is
+/// dropped before each sync.
+function dropLegacySession() {
+  const config = window.NOTES_CONFIG;
+  if (config?.containerIdentifier && profile.legacyCookiePath) document.cookie = `${config.containerIdentifier}=; Max-Age=0; path=${profile.legacyCookiePath}`;
 }
 let cloudkitContainer = null;
 /// The Apple session ended (it expires, or was signed out elsewhere). The
@@ -970,12 +1148,14 @@ async function finishReauth() {
   } catch (error) { $('reauth-text').textContent = error.message; }
 }
 async function ensureCloudKit() {
-  const config = window.TASKFLOW_NOTES_CONFIG;
+  const config = window.NOTES_CONFIG;
   if (!config?.apiToken) return null;
-  // CloudKit scopes its session cookie to the page's folder: settle on one
-  // URL before it writes (the worker also answers /notes/ by redirect).
+  // CloudKit scopes its session cookie to the page's folder. A page can be
+  // reached at more than one URL (Sebastian's at /sebastian/notes and
+  // /sebastian/notes/), so settle on the configured one before CloudKit writes.
   const home = new URL(config.websiteURL);
   if (location.pathname !== home.pathname) history.replaceState(history.state, '', home.pathname + location.search + location.hash);
+  dropLegacySession();
   await loadCloudKit();
   if (!cloudkitContainer) {
     CloudKit.configure({containers: [{containerIdentifier: config.containerIdentifier, environment: config.environment,
@@ -1015,12 +1195,7 @@ $('connect').onclick = async () => {
 $('try-demo').onclick = async () => {
   session++; entering = null; refreshing = false; account = '';
   provider = new DemoNotesProvider();
-  const samples = [
-    ['Welcome to TaskFlow Notes', 'Your notes, in any browser.\n\n- **Title** at the top, writing below\n- Format with the toolbar, or ⌘B and ⌘I\n- File notes in folders and add tags at the bottom', ['taskflow'], ''],
-    ['Weekend plans', '- [ ] Farmers market\n- [ ] Walk by the water\n- [x] Book dinner', ['personal'], 'Home'],
-    ['Before Monday', '## Get ahead\n\n1. Review the week\n2. Pick the first task\n\n> Small steps count.', ['work'], 'Work']
-  ];
-  for (const [title, body, tags, folder] of samples) await provider.save({...newNote(), title, body, tags, folder});
+  for (const {title, body, tags = [], folder = ''} of profile.samples ?? []) await provider.save({...newNote(), title, body, tags, ...(features.folders ? {folder} : {})});
   await enterWorkspace(await provider.connect());
 };
 function reset() {
@@ -1034,7 +1209,7 @@ function reset() {
   if ($('conflict-dialog').open) $('conflict-dialog').close();
   closeEditor(); closeSidebar();
   $('note-title').value = ''; rich.setText('', 'silent'); rich.getModule('history').clear();
-  $('search').value = ''; $('note-list').replaceChildren(); $('tag-nav').replaceChildren(); $('folder-nav').replaceChildren(); $('all-tag-nav').replaceChildren(); $('tag-filter').value = '';
+  $('search').value = ''; $('note-list').replaceChildren(); $('tag-nav').replaceChildren(); $('all-tag-nav').replaceChildren(); $('folder-nav').replaceChildren(); $('tag-filter').value = '';
   $('workspace').hidden = true; $('welcome').hidden = false; $('notice').hidden = true;
   setSyncStatus('');
 }
