@@ -32,12 +32,11 @@ Fixes
 • Fixed a crash when tapping a task notification.
 • Permission screens now say "Continue", so you make the choice in the system prompt.
 
-ALSO NEW SINCE THE LAST RELEASE (1.14)
-• A redesigned Today with Focus Next, Top 3, overdue planning, available time and sections you can customize.
-• Watch Later tracks TV shows: episodes, seasons, posters and upcoming releases.
-• Read Later saves links from any app with titles, previews and reading time.
-• Shopping lists add stores, quantities, Buy Again, paste several items and cleanup tools.
-• Task dependencies, and notes that sync with iCloud.
+ALSO NEW SINCE 1.12 (FROM 1.14)
+• Notes on the web: read and edit your notes in your browser, synced through your own iCloud.
+• Better shopping lists: quick store filters, totals and budgets, Buy Again, and widgets with up to 10 items.
+• Improved Watch Later: posters, Continue Watching, season progress and spoiler-free episode screens.
+• Guided setup, suggested list layouts and simpler list cleanup.
 
 ## Reply to App Review (submission d1808949-cf5c-43b4-b7b2-ac815c8329f6, 1.14 (7))
 
