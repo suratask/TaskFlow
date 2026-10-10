@@ -123,6 +123,17 @@ kbd { font: inherit; font-size: .9em; border: 1px solid var(--line); border-radi
 .format-bar button:hover { background: var(--hover); color: var(--ink); }
 .format-bar button[aria-pressed="true"] { background: var(--selected); color: var(--ink); }
 .format-bar svg { display: block; }
+/* Each formatting button names itself on hover or keyboard focus, with its
+   shortcut or typing hint underneath, sooner and clearer than a native title. */
+.format-bar button[data-tip] { position: relative; }
+@media (hover: hover) {
+  .format-bar button[data-tip]:hover::after, .format-bar button[data-tip]:focus-visible::after {
+    content: attr(data-tip) "\A" attr(data-keys); white-space: pre; position: absolute; z-index: 30; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    padding: 6px 9px; border-radius: 7px; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 500; line-height: 1.4; text-align: center;
+    pointer-events: none; animation: tip-in .12s .35s both; }
+  .format-bar button[data-tip]:first-child::after { left: 0; transform: none; text-align: left; }
+}
+@keyframes tip-in { from { opacity: 0; } to { opacity: 1; } }
 .link-form { display: flex; align-items: center; gap: 6px; margin: 0 16px 6px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--sidebar); }
 .link-form input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 7px; padding: 6px 9px; font-size: 14px; }
 .link-form input.error { border-color: var(--danger); }

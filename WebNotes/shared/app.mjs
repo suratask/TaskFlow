@@ -650,6 +650,8 @@ function updateFormatState() {
   $('link-button').setAttribute('aria-pressed', String(!!format.link));
 }
 rich.on('selection-change', updateFormatState);
+// Shortcuts are written for the Mac in the page; other systems use Ctrl.
+if (!/Mac|iPhone|iPad/.test(navigator.platform)) for (const button of document.querySelectorAll('[data-keys]')) button.dataset.keys = button.dataset.keys.replace(/^⌘(\w)$/, 'Ctrl+$1');
 for (const button of document.querySelectorAll('[data-format]')) {
   button.addEventListener('mousedown', event => event.preventDefault());
   button.addEventListener('click', () => {
