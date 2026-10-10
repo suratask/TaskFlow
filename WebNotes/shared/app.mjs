@@ -31,6 +31,8 @@ let view = {kind: 'all', tag: '', folder: ''};
 /// The list order as shown when editing began (id → position), so saving
 /// doesn't move cards under the pointer. Released when the editing ends.
 let orderLock = null, shownOrder = [];
+/// Set by the keyboard: the next list redraw focuses the open note's card.
+let cardFocusPending = false;
 
 // No uploader: images and files are added in the app (see the paste and drop handlers).
 const rich = new Quill('#note-body', {modules: {toolbar: false, history: {userOnly: true}, uploader: {mimetypes: []}},
@@ -299,10 +301,12 @@ function renderList() {
   $('list-title').textContent = `${names[view.kind]} · ${listed.length} ${listed.length === 1 ? 'note' : 'notes'}`;
   $('empty-trash').hidden = view.kind !== 'trash' || !listed.length || !features.permanentDelete;
   const list = $('note-list'), scroll = list.scrollTop;
+  // Redrawing replaces the cards, so keyboard focus moves to the new one.
+  const focusedID = list.contains(document.activeElement) ? document.activeElement.dataset.id : null;
   list.replaceChildren(...listed.map(note => {
     const {title, preview} = cardText(note);
     const card = document.createElement('button'); card.type = 'button';
-    card.className = 'note-card' + (note.id === draft?.id ? ' selected' : '');
+    card.className = 'note-card' + (note.id === draft?.id ? ' selected' : ''); card.dataset.id = note.id;
     const heading = document.createElement('span'); heading.className = 'note-card-title';
     if (isPinned(note)) { const pin = document.createElement('span'); pin.className = 'pin'; pin.textContent = '★'; pin.setAttribute('aria-label', 'Pinned'); heading.append(pin); }
     heading.append(title);
@@ -320,6 +324,10 @@ function renderList() {
     list.append(empty);
   }
   list.scrollTop = scroll;
+  const keyboard = cardFocusPending, focusID = keyboard ? draft?.id : focusedID;
+  cardFocusPending = false;
+  const card = focusID && [...list.children].find(child => child.dataset.id === focusID);
+  if (card) { card.focus({preventScroll: true}); if (keyboard) card.scrollIntoView({block: 'nearest'}); }
 }
 /// Up to three tags on a card, each with its colour; the rest as "+2".
 function cardTags(tags, folder) {
@@ -651,8 +659,11 @@ function updateFormatState() {
 }
 rich.on('selection-change', updateFormatState);
 // Shortcuts are written for the Mac in the page; other systems use Ctrl.
-const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
-if (modKey !== '⌘') for (const button of document.querySelectorAll('[data-keys]')) button.dataset.keys = button.dataset.keys.replace(/^⌘(\w)$/, 'Ctrl+$1');
+const isApple = /Mac|iPhone|iPad/.test(navigator.platform);
+const modKey = isApple ? '⌘' : 'Ctrl+';
+/// "⇧⌘9" and "⌘Return" as this system writes them ("Ctrl+Shift+9", "Ctrl+Return").
+const keyLabel = text => isApple ? text : text.replace(/⇧⌘/g, 'Ctrl+Shift+').replace(/⌘/g, 'Ctrl+');
+for (const element of document.querySelectorAll('[data-keys]')) element.dataset.keys = keyLabel(element.dataset.keys);
 
 /// The reference lists the toolbar's own buttons (icon, name, hint), so it
 /// can't drift from them, then the page's other shortcuts.
@@ -666,11 +677,20 @@ function renderHelp() {
   $('help-format').replaceChildren(...[...document.querySelectorAll('#format-bar button[data-tip]:not(#format-help)')]
     .map(button => row(button.querySelector('svg')?.cloneNode(true), button.dataset.tip, button.dataset.keys)));
   $('help-more').replaceChildren(...[
-    ['Tick a checklist item', 'Click its circle'],
-    ['Open a link', `${modKey === '⌘' ? '⌘' : 'Ctrl'}-click it (tap on a phone)`],
+    ['Tick a checklist item', keyLabel('Click its circle, or ⌘Return on its line')],
+    ['Indent a list item', 'Tab (⇧Tab to undo)'],
+    ['Open a link', `${isApple ? '⌘' : 'Ctrl'}-click it (tap on a phone)`],
     ['Save now', `${modKey}S (notes also save as you type)`],
-    ['Find notes with a tag', 'Type # in the search box'],
     ['Add a tag', 'Type at the bottom of a note, then Return'],
+  ].map(([label, keys]) => row(null, label, keys)));
+  // Single keys, which work whenever the cursor isn't in a note or a field.
+  $('help-keys').replaceChildren(...[
+    ['New note', 'N'],
+    ['Search', '/ (then # for a tag)'],
+    ['Next / previous note', 'J / K (or ↓ / ↑ in the list)'],
+    ['Edit the open note', 'Return'],
+    ['Back to the list', 'Esc, from inside a note'],
+    ['This help', '?'],
   ].map(([label, keys]) => row(null, label, keys)));
 }
 $('format-help').onclick = () => { renderHelp(); $('help-dialog').showModal(); };
@@ -1094,8 +1114,75 @@ applyTheme();
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 's') { event.preventDefault(); flush(); }
   else if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k' && rich.hasFocus()) { event.preventDefault(); openLinkBar(); }
-  else if (event.key === 'Escape') { closeSidebar(); setInfoOpen(false); }
+  else if (event.key === 'Escape') {
+    if (document.querySelector('dialog[open]')) return;
+    if (!$('info-panel').hidden || $('workspace').classList.contains('sidebar-open')) { closeSidebar(); setInfoOpen(false); }
+    else if (draft && $('editor').contains(document.activeElement)) leaveNote();
+  }
+  else handleSingleKey(event);
 });
+
+// MARK: - Keyboard shortcuts
+
+/// Whether a key press is meant as typing: in a field, a note, or a dialog.
+const isTypingTarget = target => target instanceof Element && (target.closest('input, textarea, select, [contenteditable="true"], dialog') !== null);
+/// Esc from inside a note: the text loses the cursor, so the single keys work
+/// again, and the note's card is focused so J/K carry on from it.
+function leaveNote() {
+  if (dirty) flush();
+  document.activeElement?.blur?.();
+  if (getComputedStyle($('back')).display !== 'none') $('workspace').classList.remove('show-editor');
+  focusSelectedCard();
+}
+function focusSelectedCard() { cardFocusPending = true; scheduleRender(); }
+/// J/K (or ↓/↑) open the next or previous note in the list as shown.
+async function stepNote(by) {
+  if (!shownOrder.length) return;
+  const index = shownOrder.indexOf(draft?.id);
+  const next = index < 0 ? (by > 0 ? 0 : shownOrder.length - 1) : Math.min(shownOrder.length - 1, Math.max(0, index + by));
+  if (shownOrder[next] === draft?.id) return;
+  await selectNote(shownOrder[next]);
+  focusSelectedCard();
+}
+/// Return on the list: start writing in the open note, as a click would,
+/// including unlocking text that has the app's formatting.
+function editOpenNote() {
+  if (!draft || isDeleted(draft)) return;
+  if (bodyLocked()) { unlockedFormatting.add(draft.id); renderNoteState(); }
+  rich.focus(); rich.setSelection(rich.getLength(), 0, 'user');
+}
+/// Gmail-style single keys. They only act when nothing is being typed into,
+/// and never with ⌘, Ctrl or Alt held, so writing and browser shortcuts are untouched.
+function handleSingleKey(event) {
+  if (!provider || event.metaKey || event.ctrlKey || event.altKey || event.isComposing || isTypingTarget(event.target)) return;
+  const onCard = event.target instanceof Element && event.target.closest('.note-card');
+  const key = event.key;
+  if (key === 'n' || key === 'N') { event.preventDefault(); $('new-note').click(); }
+  else if (key === '/') { event.preventDefault(); $('search').focus(); $('search').select(); }
+  else if (key === '?') { event.preventDefault(); $('format-help').click(); }
+  // The arrows only move between notes from the list, so they still scroll a note being read.
+  else if (key === 'j' || (key === 'ArrowDown' && onCard)) { event.preventDefault(); stepNote(1); }
+  else if (key === 'k' || (key === 'ArrowUp' && onCard)) { event.preventDefault(); stepNote(-1); }
+  else if (key === 'Enter' && (onCard || event.target === document.body)) {
+    // A focused card opens its own note first; Return then goes into it.
+    event.preventDefault();
+    if (onCard && !onCard.classList.contains('selected')) onCard.click(); else editOpenNote();
+  }
+}
+// In a note: ⇧⌘9 makes the line a checklist; ⌘Return ticks or unticks a
+// checklist item. Caught before the editor's own keys see them.
+rich.root.addEventListener('keydown', event => {
+  if (!(isApple ? event.metaKey : event.ctrlKey) || event.altKey) return;
+  if (event.shiftKey && event.code === 'Digit9') { event.preventDefault(); event.stopPropagation(); document.querySelector('[data-format="checklist"]').click(); }
+  else if (!event.shiftKey && event.key === 'Enter') {
+    const range = rich.getSelection(); if (!range) return;
+    const list = rich.getFormat(range).list;
+    if (list !== 'checked' && list !== 'unchecked') return;
+    event.preventDefault(); event.stopPropagation();
+    rich.formatLine(range.index, range.length, 'list', list === 'checked' ? 'unchecked' : 'checked', 'user');
+    updateFormatState();
+  }
+}, true);
 window.addEventListener('beforeunload', event => { if (dirty) { stash(); event.preventDefault(); event.returnValue = ''; } });
 // Switching apps or tabs, locking the screen or closing the tab saves at once
 // rather than after the usual pause; the backup covers a save cut short.
