@@ -651,7 +651,30 @@ function updateFormatState() {
 }
 rich.on('selection-change', updateFormatState);
 // Shortcuts are written for the Mac in the page; other systems use Ctrl.
-if (!/Mac|iPhone|iPad/.test(navigator.platform)) for (const button of document.querySelectorAll('[data-keys]')) button.dataset.keys = button.dataset.keys.replace(/^⌘(\w)$/, 'Ctrl+$1');
+const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
+if (modKey !== '⌘') for (const button of document.querySelectorAll('[data-keys]')) button.dataset.keys = button.dataset.keys.replace(/^⌘(\w)$/, 'Ctrl+$1');
+
+/// The reference lists the toolbar's own buttons (icon, name, hint), so it
+/// can't drift from them, then the page's other shortcuts.
+function renderHelp() {
+  const row = (icon, label, keys) => {
+    const tr = document.createElement('tr'), iconCell = document.createElement('td'), labelCell = document.createElement('th'), keysCell = document.createElement('td');
+    iconCell.className = 'help-icon'; if (icon) iconCell.append(icon);
+    labelCell.scope = 'row'; labelCell.textContent = label; keysCell.textContent = keys;
+    tr.append(iconCell, labelCell, keysCell); return tr;
+  };
+  $('help-format').replaceChildren(...[...document.querySelectorAll('#format-bar button[data-tip]:not(#format-help)')]
+    .map(button => row(button.querySelector('svg')?.cloneNode(true), button.dataset.tip, button.dataset.keys)));
+  $('help-more').replaceChildren(...[
+    ['Tick a checklist item', 'Click its circle'],
+    ['Open a link', `${modKey === '⌘' ? '⌘' : 'Ctrl'}-click it (tap on a phone)`],
+    ['Save now', `${modKey}S (notes also save as you type)`],
+    ['Find notes with a tag', 'Type # in the search box'],
+    ['Add a tag', 'Type at the bottom of a note, then Return'],
+  ].map(([label, keys]) => row(null, label, keys)));
+}
+$('format-help').onclick = () => { renderHelp(); $('help-dialog').showModal(); };
+$('help-dialog-done').onclick = () => $('help-dialog').close();
 for (const button of document.querySelectorAll('[data-format]')) {
   button.addEventListener('mousedown', event => event.preventDefault());
   button.addEventListener('click', () => {

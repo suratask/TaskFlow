@@ -90,6 +90,7 @@
         <button data-format="checklist" aria-label="Checklist" data-tip="Checklist" data-keys="or type [ ] and a space"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4.5h5.5M8 11.5h5.5"/><circle cx="3.6" cy="4.5" r="2.1"/><path d="M2.7 4.55l.7.7 1.2-1.4" stroke-width="1.2"/><circle cx="3.6" cy="11.5" r="2.1"/></svg></button>
         <span class="sep" aria-hidden="true"></span>
         <button id="link-button" aria-label="Link" data-tip="Link" data-keys="⌘K" aria-pressed="false"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M6.6 9.4a2.8 2.8 0 0 0 4 0l2.3-2.3a2.8 2.8 0 0 0-4-4l-.9.9M9.4 6.6a2.8 2.8 0 0 0-4 0L3.1 8.9a2.8 2.8 0 0 0 4 4l.9-.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        <button id="format-help" aria-label="Formatting help" aria-haspopup="dialog" data-tip="Formatting Help" data-keys="Every button and shortcut"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.3"/><path d="M6.2 6.3a1.85 1.85 0 1 1 2.6 1.7c-.5.25-.8.6-.8 1.15v.3"/><circle cx="8" cy="11.4" r=".5" fill="currentColor" stroke="none"/></svg></button>
       </div>
       <span id="save-state" class="save-state" role="status" aria-live="polite"></span>
       <button id="download-draft" class="text-button" hidden>Download Draft</button>
@@ -143,6 +144,12 @@
   <div id="tag-manager" class="tag-manager"></div>
   <p id="tag-dialog-status" class="dialog-status" role="status" aria-live="polite"></p>
   <div class="dialog-actions"><button id="tag-dialog-done" class="primary">Done</button></div>
+</dialog>
+<dialog id="help-dialog" class="help-dialog" aria-labelledby="help-dialog-title">
+  <h2 id="help-dialog-title">Formatting</h2>
+  <table class="help-table"><thead><tr><th scope="col"><span class="sr-only">Button</span></th><th scope="col">Does</th><th scope="col">Shortcut or typing</th></tr></thead><tbody id="help-format"></tbody>
+    <tbody><tr class="help-section"><th colspan="3" scope="colgroup">More</th></tr></tbody><tbody id="help-more"></tbody></table>
+  <div class="dialog-actions"><button id="help-dialog-done" class="primary">Done</button></div>
 </dialog>
 <dialog id="purge-dialog">
   <h2 id="purge-title"></h2>

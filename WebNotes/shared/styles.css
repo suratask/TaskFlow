@@ -271,3 +271,15 @@ dialog h2 { margin-top: 0; font-size: 19px; }
   .info-panel { right: 8px; top: 48px; }
   .conflict-columns { grid-template-columns: 1fr; }
 }
+
+/* Formatting help */
+.help-dialog { max-width: 480px; }
+.help-table .help-section th { padding: 18px 8px 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+.help-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.help-table th, .help-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.help-table thead th { font-size: 12px; font-weight: 600; color: var(--muted); }
+.help-table tbody th { font-weight: 600; white-space: nowrap; }
+.help-table td:last-child { color: var(--muted); }
+.help-table .help-icon { width: 28px; padding-right: 0; color: var(--ink); }
+.help-table .help-icon svg { display: block; }
+.help-table tbody:last-child tr:last-child > *, .help-table #help-format tr:last-child > * { border-bottom: 0; }
