@@ -60,8 +60,11 @@ final class TaskFlowUITests: XCTestCase {
         launch()
         let field = try openInlineAddField()
         field.typeText("Buy milk tomorrow #groceries !high")
-        XCTAssertTrue(app.staticTexts["#groceries"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["High Priority"].exists)
+        // The highlights are one accessibility element labelled "Recognized #groceries, High Priority, …".
+        let recognized = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Recognized ")).firstMatch
+        XCTAssertTrue(recognized.waitForExistence(timeout: 5))
+        XCTAssertTrue(recognized.label.contains("#groceries"), recognized.label)
+        XCTAssertTrue(recognized.label.contains("High Priority"), recognized.label)
         field.clearText()
     }
 
