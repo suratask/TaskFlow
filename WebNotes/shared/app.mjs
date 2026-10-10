@@ -686,6 +686,7 @@ const HELP_SECTIONS = () => [
     {label: 'Search', help: '`/`, then `#` for a tag'},
     {label: 'Next / previous note', help: '`J` / `K`, or `↓` / `↑` in the list'},
     {label: 'Edit the open note', help: '`Return`'},
+    {label: 'Expand the note, or show the list again', help: '`F`'},
     {label: 'This help', help: '`?`'},
   ]},
 ];
@@ -1192,6 +1193,22 @@ document.addEventListener('keydown', event => {
   else handleSingleKey(event);
 });
 
+// MARK: - Expanded note
+
+/// The note can take the whole window, with the sidebar and list set aside.
+/// The choice is this browser's and outlasts a reload.
+const expandKey = STORE + 'expanded';
+let expanded = storage.get(expandKey) === '1';
+function setExpanded(value) {
+  expanded = value; storage.set(expandKey, value ? '1' : '0');
+  $('workspace').classList.toggle('expanded', value);
+  $('expand-note').setAttribute('aria-pressed', String(value));
+  const label = value ? 'Show the note list' : 'Expand the note';
+  $('expand-note').setAttribute('aria-label', label); $('expand-note').title = `${label} (F)`;
+}
+setExpanded(expanded);
+$('expand-note').onclick = () => setExpanded(!expanded);
+
 // MARK: - Keyboard shortcuts
 
 /// Whether a key press is meant as typing: in a field, a note, or a dialog.
@@ -1229,6 +1246,7 @@ function handleSingleKey(event) {
   const key = event.key;
   if (key === 'n' || key === 'N') { event.preventDefault(); $('new-note').click(); }
   else if (key === '/') { event.preventDefault(); $('search').focus(); $('search').select(); }
+  else if ((key === 'f' || key === 'F') && draft) { event.preventDefault(); setExpanded(!expanded); }
   else if (key === '?') { event.preventDefault(); $('format-help').click(); }
   // The arrows only move between notes from the list, so they still scroll a note being read.
   else if (key === 'j' || (key === 'ArrowDown' && onCard)) { event.preventDefault(); stepNote(1); }
