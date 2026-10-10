@@ -231,3 +231,24 @@ dialog h2 { margin-top: 0; font-size: 19px; }
   .info-panel { right: 8px; top: 48px; }
   .conflict-columns { grid-template-columns: 1fr; }
 }
+
+/* TaskFlow's colours: navy in dark mode (as the earlier TaskFlow page had),
+   a light blue tint in light mode. Everything above is shared with
+   Sebastian's page; only these tokens differ. */
+:root {
+  --bg: #f5f9ff; --sidebar: #e8f0fb; --list: #eef4fd; --hover: #dde8f7; --selected: #d0e0f6;
+  --ink: #17243a; --muted: #5d6f87; --faint: #8a9ab0; --line: #d5e0ee; --pill: #dfe8f5;
+  --accent: #246bd8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111a26; --sidebar: #172230; --list: #142030; --hover: #1f2d3f; --selected: #233c5d;
+    --ink: #e5edf8; --muted: #a1b0c3; --faint: #6f8197; --line: #2b3a4c; --pill: #24344a;
+    --accent: #5699ff; --accent-ink: #081628;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111a26; --sidebar: #172230; --list: #142030; --hover: #1f2d3f; --selected: #233c5d;
+  --ink: #e5edf8; --muted: #a1b0c3; --faint: #6f8197; --line: #2b3a4c; --pill: #24344a;
+  --accent: #5699ff; --accent-ink: #081628;
+}

@@ -879,7 +879,7 @@ function applyTheme() {
   const saved = readTheme();
   if (saved) document.documentElement.dataset.theme = saved; else delete document.documentElement.dataset.theme;
   $('theme-toggle').textContent = isDark() ? '☀' : '◐';
-  document.querySelector('meta[name="theme-color"]').content = isDark() ? '#1c1c1e' : '#f6f6f7';
+  document.querySelector('meta[name="theme-color"]').content = isDark() ? '#111a26' : '#e8f0fb';
 }
 $('theme-toggle').onclick = () => {
   try { localStorage.setItem(themeKey, isDark() ? 'light' : 'dark'); } catch { /* Private browsing keeps the system look. */ }
