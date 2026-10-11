@@ -18,6 +18,12 @@ final class TaskRepository {
 
         var id: String { rawValue }
     }
+    /// Everything is the full app; Read & Watch Later narrows it to a media library (see ReadWatchModeView).
+    enum AppMode: String, CaseIterable, Identifiable {
+        case everything = "Everything"
+        case readWatch = "Read & Watch Later"
+        var id: String { rawValue }
+    }
     enum AppTheme: String, CaseIterable, Identifiable {
         case system = "System"
         case classicBlue = "Classic Blue"
@@ -275,6 +281,10 @@ final class TaskRepository {
     var taskSortOption: TaskSortOption = .dueDate { didSet { preferences.set(taskSortOption.rawValue, forKey: "TaskFlow.taskSortOption"); scheduleCloudSync() } }
     var taskSortDirection: TaskSortDirection = .ascending { didSet { preferences.set(taskSortDirection.rawValue, forKey: "TaskFlow.taskSortDirection"); scheduleCloudSync() } }
     var appearanceMode: AppearanceMode = .system { didSet { preferences.set(appearanceMode.rawValue, forKey: "TaskFlow.appearanceMode"); scheduleCloudSync() } }
+    /// Kept on this device, like other layout choices that depend on how this device is used.
+    var appMode: AppMode = .everything { didSet { preferences.set(appMode.rawValue, forKey: "TaskFlow.appMode") } }
+    /// Set by the TaskFlow Focus filter, so a Focus such as Evening can switch on Read & Watch Later mode.
+    var focusRequestsReadWatchMode = false
     var appTheme: AppTheme = .system {
         didSet {
             preferences.set(appTheme.rawValue, forKey: "TaskFlow.appTheme")
@@ -395,6 +405,8 @@ final class TaskRepository {
         hasCompletedOnboarding = preferences.bool(forKey: "TaskFlow.hasCompletedOnboarding")
         appearanceMode = AppearanceMode(rawValue: preferences.string(forKey: "TaskFlow.appearanceMode") ?? "") ?? .system
         appTheme = (AppTheme(rawValue: preferences.string(forKey: "TaskFlow.appTheme") ?? "") ?? .system).canonical
+        appMode = AppMode(rawValue: preferences.string(forKey: "TaskFlow.appMode") ?? "") ?? .everything
+        focusRequestsReadWatchMode = TaskFlowSharedSettings.defaults.bool(forKey: TaskFlowSharedSettings.focusReadWatchModeKey)
         taskDensity = TaskDensity(rawValue: preferences.string(forKey: "TaskFlow.taskDensity") ?? "") ?? .comfortable
         taskViewMode = (TaskViewMode(rawValue: preferences.string(forKey: "TaskFlow.taskViewMode") ?? "") ?? .list).normalized
         taskGroupOption = TaskGroupOption(rawValue: preferences.string(forKey: "TaskFlow.taskGroupOption") ?? "") ?? .none

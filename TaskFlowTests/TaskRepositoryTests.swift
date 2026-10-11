@@ -2352,6 +2352,20 @@ final class TaskRepositoryTests: XCTestCase {
         XCTAssertEqual(Array(repository.todaySectionOrder.prefix(4)), [.focus, .calendar, .summary, .tasks])
     }
 
+    func testReadWatchModeFollowsSettingOrFocusAndShowsOnlyReadingLists() {
+        let (repository, store, preferences) = fixture()
+        repository.lists = [TaskList(id: "watch", title: "Watch Later", color: .blue), TaskList(id: "work", title: "Work", color: .green)]
+        repository.setListProfile(SpecializedListProfile(type: .reading), for: "watch")
+        XCTAssertEqual(repository.readingLists.map(\.id), ["watch"])
+        XCTAssertFalse(repository.isReadWatchMode)
+        repository.focusRequestsReadWatchMode = true
+        XCTAssertTrue(repository.isReadWatchMode)
+        repository.focusRequestsReadWatchMode = false
+        repository.appMode = .readWatch
+        XCTAssertTrue(repository.isReadWatchMode)
+        XCTAssertEqual(TaskRepository(preferences: preferences, metadataStore: store).appMode, .readWatch)
+    }
+
     func testTurnedOffListsAndCalendarsHideFromRepository() {
         let (repository, _, _) = fixture()
         let work = TaskList(id: "work", title: "Work", color: .blue)

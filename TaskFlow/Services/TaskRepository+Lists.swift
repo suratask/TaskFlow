@@ -1006,6 +1006,23 @@ extension TaskRepository {
     /// Re-applies reminders after list options that affect them change.
     func refreshDeadlineReminders() async { await rescheduleNotifications() }
 
+    // MARK: Read & Watch Later mode
+
+    /// The app shows only Read & Watch Later lists when the user chose that mode or a Focus asks for it.
+    var isReadWatchMode: Bool { appMode == .readWatch || focusRequestsReadWatchMode }
+    var readingLists: [TaskList] { lists.filter { listProfile($0.id).type == .reading } }
+    /// Creates a reminder list with the Read & Watch Later layout, for starting the mode with no such list yet.
+    func createReadingList(named name: String) async {
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let existing = Set(allReminderLists.map(\.id))
+        await createList(named: title)
+        guard let list = lists.first(where: { !existing.contains($0.id) && $0.title == title }) else { return }
+        var profile = listProfile(list.id)
+        profile.type = .reading
+        setListProfile(profile, for: list.id)
+    }
+
     // MARK: Lists in TaskFlow
 
     /// Lists the user hasn't turned off in Settings; empty when Reminders are off entirely.

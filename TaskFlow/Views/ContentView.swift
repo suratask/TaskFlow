@@ -27,7 +27,9 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if usesCompactNavigation {
+            if repository.isReadWatchMode {
+                ReadWatchModeView(repository: repository, editorDraft: $editorDraft, isShowingSettings: $isShowingSettings)
+            } else if usesCompactNavigation {
                 CompactNavigationView(
                     repository: repository,
                     selectedTab: $compactTab,
@@ -164,7 +166,7 @@ struct ContentView: View {
         .sensoryFeedback(.impact(weight: .light), trigger: repository.undoFeedbackSequence)
         .overlay(alignment: .bottom) {
             // Undo and error messages appear as toasts above the tab bar instead of alerts or list rows.
-            StatusToastHost(repository: repository, bottomInset: usesCompactNavigation ? 64 : TaskFlowTheme.Spacing.large)
+            StatusToastHost(repository: repository, bottomInset: usesCompactNavigation || repository.isReadWatchMode ? 64 : TaskFlowTheme.Spacing.large)
         }
         .taskFlowThemedBackground()
         .preferredColorScheme(preferredColorScheme)
@@ -268,7 +270,8 @@ struct ContentView: View {
 
     private var selectedTaskSheetBinding: Binding<Bool> {
         Binding {
-            usesCompactNavigation && repository.selectedTaskID != nil
+            // Read & Watch Later mode has no detail column, so details open full screen on every device.
+            (usesCompactNavigation || repository.isReadWatchMode) && repository.selectedTaskID != nil
         } set: { isPresented in
             if !isPresented {
                 repository.selectedTaskID = nil
@@ -788,6 +791,95 @@ private struct CompactNotesTabView: View {
                 repository: repository,
                 selectedCalendarEvent: $selectedCalendarEvent
             )
+        }
+    }
+}
+
+/// Read & Watch Later mode: TaskFlow as a media library. Up Next (a Today page for saved media) comes first, then
+/// each Read & Watch Later list and Upcoming Episodes; Today, Tasks, Calendar and Notes stay out of sight until the
+/// mode is turned off in Settings.
+private struct ReadWatchModeView: View {
+    @Bindable var repository: TaskRepository
+    @Binding var editorDraft: TaskDraft?
+    @Binding var isShowingSettings: Bool
+    @State private var selection = ""
+    @State private var newListName = "Watch Later"
+    private static let upcomingTag = "upcoming"
+    private static let homeTag = "home"
+
+    var body: some View {
+        if repository.accessState != .granted {
+            NavigationStack {
+                AccessOverlay(repository: repository)
+                    .navigationTitle("Read & Watch Later")
+                    .toolbar { settingsButton }
+            }
+        } else if !repository.hasLoadedInitialData {
+            // Avoids flashing the "no lists" screen before reminder lists load.
+            ProgressView()
+        } else if repository.readingLists.isEmpty {
+            NavigationStack { emptyLibrary.toolbar { settingsButton } }
+        } else {
+            TabView(selection: $selection) {
+                NavigationStack {
+                    ReadWatchTodayView(repository: repository)
+                        .toolbar { settingsButton }
+                }
+                .tabItem { Label("Up Next", systemImage: "play.square.stack") }
+                .tag(Self.homeTag)
+                ForEach(repository.readingLists) { list in
+                    NavigationStack {
+                        SpecializedTaskListView(repository: repository, listID: list.id, editorDraft: $editorDraft)
+                            .id(list.id)
+                            .taskFlowThemedBackground()
+                            .navigationTitle(list.title)
+                            .toolbar { settingsButton }
+                    }
+                    .tabItem { Label(list.title, systemImage: repository.listIcons[list.id] ?? SpecializedListType.reading.icon) }
+                    .tag(list.id)
+                }
+                NavigationStack {
+                    UpcomingWatchReleases(repository: repository, listID: repository.readingLists.first?.id ?? "", includesAllLists: true)
+                        .toolbar { settingsButton }
+                }
+                .tabItem { Label("Upcoming", systemImage: "calendar.badge.clock") }
+                .tag(Self.upcomingTag)
+            }
+            // List screens read the selected scope (for example, to open the right list after a share).
+            .onChange(of: selection, initial: true) { _, id in
+                if repository.readingLists.contains(where: { $0.id == id }) {
+                    repository.selectedScope = .list(id)
+                } else if selection.isEmpty {
+                    selection = Self.homeTag
+                }
+            }
+        }
+    }
+
+    private var emptyLibrary: some View {
+        Form {
+            Section {
+                ContentUnavailableView("No Read & Watch Later Lists", systemImage: "books.vertical",
+                                       description: Text("Create a list for shows, movies, articles and books, or give an existing list the Read & Watch Later layout in Settings › Lists."))
+            }
+            Section {
+                TextField("List Name", text: $newListName).textInputAutocapitalization(.words)
+                Button("Create List", systemImage: "plus") { Task { await repository.createReadingList(named: newListName) } }
+                    .disabled(newListName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Section {
+                Button("Show Everything", systemImage: "square.grid.2x2") { repository.appMode = .everything }
+                    .disabled(repository.focusRequestsReadWatchMode)
+            } footer: {
+                if repository.focusRequestsReadWatchMode { Text("Your current Focus turns on Read & Watch Later mode.") }
+            }
+        }
+        .navigationTitle("Read & Watch Later")
+    }
+
+    private var settingsButton: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button("Settings", systemImage: "gearshape") { isShowingSettings = true }
         }
     }
 }

@@ -1206,7 +1206,12 @@ struct UpcomingWatchReleases: View {
     @Bindable var repository: TaskRepository
     let listID: String
     @State private var days = 30
-    @State private var allLists = false
+    @State private var allLists: Bool
+    init(repository: TaskRepository, listID: String, includesAllLists: Bool = false) {
+        _repository = Bindable(wrappedValue: repository)
+        self.listID = listID
+        _allLists = State(initialValue: includesAllLists)
+    }
     @State private var now = Date()
     @State private var showID: String?
     @State private var eventDraft: EventDraft?
@@ -1631,5 +1636,224 @@ extension CGImagePropertyOrientation {
         case .rightMirrored: self = .rightMirrored
         @unknown default: self = .up
         }
+    }
+}
+
+/// Read & Watch Later mode's home, a Today page for saved media. It answers "what next?" first with one pick,
+/// then shows what's in progress, newly released, airing this week, and recently saved, across every
+/// Read & Watch Later list.
+struct ReadWatchTodayView: View {
+    @Bindable var repository: TaskRepository
+    @Environment(\.openURL) private var openURL
+    @State private var now = Date()
+    @State private var trackedShowID: String?
+    @State private var savingLink = false
+    @State private var skippedPickIDs: Set<String> = []
+
+    private var items: [TaskItem] {
+        repository.tasks.filter {
+            !$0.isCompleted && $0.parentID == nil && repository.listProfile($0.listID).type == .reading
+                && fields($0)["Merged Into"] == nil && !["Dropped", "Finished"].contains(fields($0)["Progress"] ?? "")
+        }
+    }
+    private func fields(_ task: TaskItem) -> [String: String] { repository.specializedDetails(task).fields }
+    private func isWatch(_ task: TaskItem) -> Bool { ReadingMedia.action(for: ReadingMedia.displayFormat(fields(task))) == "Watch" }
+    private func task(_ id: String) -> TaskItem? { repository.tasks.first { $0.id == id } }
+    private var sources: [ReadingMedia.EpisodeFeedSource] {
+        items.map { .init(taskID: $0.id, title: $0.title, fields: fields($0)) }
+    }
+    private var continuing: [ReadingMedia.EpisodeFeedItem] { ReadingMedia.episodeFeed(sources, mode: .continuing, now: now, onePerShow: true) }
+    private var newEpisodes: [ReadingMedia.EpisodeFeedItem] { ReadingMedia.episodeFeed(sources, mode: .newEpisodes, now: now, onePerShow: true) }
+    private var thisWeek: [ReadingMedia.EpisodeFeedItem] {
+        let end = Calendar.current.date(byAdding: .day, value: 7, to: now) ?? now
+        return ReadingMedia.episodeFeed(sources, mode: .comingSoon, now: now).filter { $0.release < end }
+    }
+    private var inProgressReading: [TaskItem] { items.filter { !isWatch($0) && fields($0)["Progress"] == "In Progress" } }
+    private var saved: [TaskItem] { items.filter { ["", "Saved"].contains(fields($0)["Progress"] ?? "") } }
+    private var recentlySaved: [TaskItem] {
+        Array(saved.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }.prefix(5))
+    }
+    /// Shows in progress come first, then things being read, then whatever has waited longest.
+    private var pickCandidates: [TaskItem] {
+        var seen = Set<String>()
+        let ordered = continuing.compactMap { task($0.taskID) } + inProgressReading
+            + saved.sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
+        return ordered.filter { seen.insert($0.id).inserted }
+    }
+    private var pick: TaskItem? {
+        let remaining = pickCandidates.filter { !skippedPickIDs.contains($0.id) }
+        return remaining.first ?? pickCandidates.first
+    }
+
+    var body: some View {
+        List {
+            Section {
+                HStack(spacing: 8) {
+                    summaryTile("New Episodes", newEpisodes.count)
+                    summaryTile("In Progress", continuing.count + inProgressReading.count)
+                    summaryTile("Saved", items.count)
+                }
+            } header: { Text(now.formatted(.dateTime.weekday(.wide).month(.wide).day())) }
+
+            if items.isEmpty {
+                Section {
+                    ContentUnavailableView("Nothing Saved Yet", systemImage: "books.vertical",
+                                           description: Text("Save shows, movies, articles and books from any app with the Share button, or tap + to add a link."))
+                }
+            } else if let pick {
+                Section("Up Next") { pickCard(pick) }
+            }
+
+            if !continuing.isEmpty {
+                Section("Continue Watching") {
+                    ForEach(continuing) { item in
+                        episodeRow(item, detail: "Next: " + item.episode.label + (ReadingMedia.remainingWatchTime(item.fields, now: now).map { " · " + $0 } ?? ""))
+                    }
+                }
+            }
+            if !newEpisodes.isEmpty {
+                Section("New Episodes") {
+                    ForEach(newEpisodes) { item in
+                        episodeRow(item, detail: item.episode.label + " · " + item.release.formatted(.relative(presentation: .named)))
+                    }
+                }
+            }
+            if !inProgressReading.isEmpty {
+                Section("Continue Reading") { ForEach(inProgressReading) { mediaRow($0) } }
+            }
+            if !thisWeek.isEmpty {
+                Section("This Week") {
+                    ForEach(thisWeek) { item in
+                        episodeRow(item, detail: item.episode.label + " · " + item.release.formatted(.dateTime.weekday(.wide).hour().minute()))
+                    }
+                }
+            }
+            if !recentlySaved.isEmpty {
+                Section("Recently Saved") { ForEach(recentlySaved) { mediaRow($0) } }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .taskFlowThemedBackground()
+        .navigationTitle("Up Next")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Save Link", systemImage: "plus") { savingLink = true }
+                    .disabled(repository.readingLists.isEmpty)
+            }
+        }
+        .refreshable { _ = await repository.refreshWatchReleaseSchedules() }
+        .task { while !Task.isCancelled { now = Date(); do { try await Task.sleep(for: .seconds(60)) } catch { return } } }
+        .sheet(isPresented: $savingLink) {
+            if let list = repository.readingLists.first { ReadingLinkCapture(repository: repository, listID: list.id) }
+        }
+        .sheet(isPresented: Binding(get: { trackedShowID != nil }, set: { if !$0 { trackedShowID = nil } })) {
+            if let trackedShowID { WatchShowTracker(repository: repository, taskID: trackedShowID) }
+        }
+    }
+
+    private func summaryTile(_ title: String, _ count: Int) -> some View {
+        VStack(spacing: 3) {
+            Text(count, format: .number).font(.title3.bold()).monospacedDigit()
+            Text(title).font(.caption).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .padding(6)
+        .background(repository.appTheme.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: TaskFlowTheme.controlRadius))
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private func pickCard(_ task: TaskItem) -> some View {
+        let fields = fields(task)
+        let catalog = ReadingMedia.tracking(fields)
+        HStack(alignment: .top, spacing: 12) {
+            poster(task, large: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(task.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                if let summary = ReadingMedia.watchProgressSummary(fields, completed: false, now: now) {
+                    Text(summary).font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    Text([ReadingMedia.displayFormat(fields), fields["Creator"], fields["Estimated Minutes"].map { $0 + " min" }]
+                        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { open(task) }
+        Group {
+            if catalog?.next(now: now) != nil {
+                EpisodeProgressActions(repository: repository, taskID: task.id, compact: true)
+            } else if !isWatch(task) {
+                if let link = fields["Source Link"].flatMap(URL.init(string:)) {
+                    Button("Open", systemImage: "safari") {
+                        Task { await markInProgressIfSaved(task) }
+                        openURL(link)
+                    }
+                }
+                Button("Mark Finished", systemImage: "checkmark") { Task { await repository.setSpecializedStage("Finished", for: task, type: .reading) } }
+            } else if let link = fields["Source Link"].flatMap(URL.init(string:)) {
+                Button("Watch", systemImage: "play.rectangle") { openURL(link) }
+            }
+            if pickCandidates.count > 1 {
+                Button("Choose Another", systemImage: "arrow.triangle.2.circlepath") {
+                    if skippedPickIDs.contains(task.id) { skippedPickIDs = [task.id] } else { skippedPickIDs.insert(task.id) }
+                }
+            }
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private func episodeRow(_ item: ReadingMedia.EpisodeFeedItem, detail: String) -> some View {
+        Button { trackedShowID = item.taskID } label: {
+            HStack(spacing: 12) {
+                if let task = task(item.taskID) { poster(task, large: false) }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title).foregroundStyle(.primary).lineLimit(2)
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .accessibilityHint("Opens episodes")
+    }
+
+    private func mediaRow(_ task: TaskItem) -> some View {
+        let fields = fields(task)
+        return Button { open(task) } label: {
+            HStack(spacing: 12) {
+                poster(task, large: false)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.title).foregroundStyle(.primary).lineLimit(2)
+                    Text([ReadingMedia.displayFormat(fields), fields["Creator"]].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .swipeActions {
+            if !isWatch(task) {
+                Button("Finished", systemImage: "checkmark") { Task { await repository.setSpecializedStage("Finished", for: task, type: .reading) } }.tint(.green)
+            }
+        }
+    }
+
+    /// Matched show posters win for watch items, as on the list's own cards.
+    private func poster(_ task: TaskItem, large: Bool) -> some View {
+        let fields = fields(task)
+        let watch = isWatch(task)
+        let matched = fields["Suppress Preview"] == "true" ? nil
+            : (fields["Artwork Override"] == "true" ? fields["Thumbnail URL"] : ReadingMedia.tracking(fields)?.show.thumbnail?.absoluteString)
+        return CachedMediaPreview(rawURL: watch ? (matched ?? fields["Thumbnail URL"]) : fields["Thumbnail URL"],
+                                  format: ReadingMedia.displayFormat(fields),
+                                  localPreview: watch && matched != nil ? nil : fields["Local Preview"],
+                                  poster: large && watch)
+    }
+
+    /// Shows open their episode list; everything else opens its details.
+    private func open(_ task: TaskItem) {
+        if ReadingMedia.tracking(fields(task)) != nil { trackedShowID = task.id } else { repository.openTask(id: task.id) }
+    }
+
+    private func markInProgressIfSaved(_ task: TaskItem) async {
+        guard ["", "Saved"].contains(fields(task)["Progress"] ?? "") else { return }
+        await repository.setSpecializedStage("In Progress", for: task, type: .reading)
     }
 }

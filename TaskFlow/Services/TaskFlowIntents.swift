@@ -467,13 +467,18 @@ struct TaskFlowFocusFilter: SetFocusFilterIntent {
     @Parameter(title: "Lists")
     var lists: [TaskFlowListEntity]?
 
+    @Parameter(title: "Read & Watch Later Mode", description: "Show TaskFlow as a library of your Read & Watch Later lists while this Focus is on.", default: false)
+    var readWatchMode: Bool
+
     var displayRepresentation: DisplayRepresentation {
         let names = (lists ?? []).map(\.title)
-        return DisplayRepresentation(title: "TaskFlow Lists", subtitle: "\(names.isEmpty ? "All Lists" : names.joined(separator: ", "))")
+        let listText = names.isEmpty ? "All Lists" : names.joined(separator: ", ")
+        return DisplayRepresentation(title: "TaskFlow Lists", subtitle: "\(readWatchMode ? "Read & Watch Later mode · " + listText : listText)")
     }
 
     func perform() async throws -> some IntentResult {
         TaskFlowSharedSettings.defaults.set((lists ?? []).map(\.id), forKey: TaskFlowSharedSettings.focusListIDsKey)
+        TaskFlowSharedSettings.defaults.set(readWatchMode, forKey: TaskFlowSharedSettings.focusReadWatchModeKey)
         await MainActor.run {
             NotificationCenter.default.post(name: .taskFlowFocusFilterChanged, object: nil)
         }
