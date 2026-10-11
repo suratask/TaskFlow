@@ -3,7 +3,7 @@ require "xcodeproj"
 project = Xcodeproj::Project.new("TaskFlow.xcodeproj")
 
 development_team = "RUS98YNC4X"
-marketing_version = "1.15"
+marketing_version = "1.16"
 project_version = "1"
 
 target = project.new_target(:application, "TaskFlow", :ios, "17.0")
