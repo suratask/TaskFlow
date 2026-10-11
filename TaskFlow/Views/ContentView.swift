@@ -59,6 +59,7 @@ struct ContentView: View {
                 isShowingOnboarding = true
             }
             await repository.consumeWidgetCompletions()
+            AppIconSwitcher.match(libraryMode: repository.isLibraryMode)
             clearSelectionForLandscapeIfNeeded()
             openPendingNotificationTaskIfNeeded()
             hasLoadedLaunchData = true
@@ -84,6 +85,8 @@ struct ContentView: View {
             guard phase == .active else { return }
             Task {
                 await repository.reloadExternalData()
+                // A Focus may have switched modes while TaskFlow was in the background.
+                AppIconSwitcher.match(libraryMode: repository.isLibraryMode)
                 await EventLiveActivityCoordinator.reconcile(events: repository.calendarEvents)
                 await RoutineTimerCoordinator.reconcile()
                 consumeSharedCaptureIfNeeded()
@@ -108,6 +111,9 @@ struct ContentView: View {
         }
         .onChange(of: repository.selectedScope) { _, _ in
             selectedCalendarEvent = nil
+        }
+        .onChange(of: repository.isLibraryMode) { _, isLibrary in
+            AppIconSwitcher.match(libraryMode: isLibrary)
         }
         .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged).debounce(for: .milliseconds(500), scheduler: RunLoop.main)) { _ in
             Task {
@@ -792,6 +798,22 @@ private struct CompactNotesTabView: View {
                 selectedCalendarEvent: $selectedCalendarEvent
             )
         }
+    }
+}
+
+/// Shows the Library icon while TaskFlow is in Library mode and the standard icon otherwise.
+@MainActor
+enum AppIconSwitcher {
+    static let libraryIconName = "LibraryIcon"
+
+    /// iOS changes the icon only while the app is in the foreground, and confirms each change with its own alert,
+    /// so this skips calls that would do nothing and runs again when the app becomes active.
+    static func match(libraryMode: Bool) {
+        let app = UIApplication.shared
+        let wanted = libraryMode ? libraryIconName : nil
+        guard app.supportsAlternateIcons, app.applicationState == .active, app.alternateIconName != wanted else { return }
+        // A failed change is retried the next time the app becomes active; the icon is cosmetic.
+        app.setAlternateIconName(wanted) { _ in }
     }
 }
 

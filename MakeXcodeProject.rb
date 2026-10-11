@@ -54,6 +54,7 @@ end
 
 target.build_configurations.each do |config|
   config.build_settings["ASSETCATALOG_COMPILER_APPICON_NAME"] = "AppIcon"
+  config.build_settings["ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES"] = "LibraryIcon"
   config.build_settings["CODE_SIGN_STYLE"] = "Automatic"
   config.build_settings["CURRENT_PROJECT_VERSION"] = project_version
   config.build_settings["DEVELOPMENT_ASSET_PATHS"] = ""
