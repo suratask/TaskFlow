@@ -776,7 +776,7 @@ extension TaskRepository {
         if includeMetadata || !hasLoadedInitialData { applyMetadata() }
 
         accessState = reminderService.authorizationState
-        focusRequestsReadWatchMode = TaskFlowSharedSettings.defaults.bool(forKey: TaskFlowSharedSettings.focusReadWatchModeKey)
+        focusRequestsLibraryMode = TaskFlowSharedSettings.defaults.bool(forKey: TaskFlowSharedSettings.focusLibraryModeKey)
         updateCalendarAccessState()
         let authorization = await notificationScheduler.authorizationStatus()
         notificationStatus = authorization.canSchedule ? .granted : (authorization == .denied ? .denied : .unknown)

@@ -27,8 +27,8 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if repository.isReadWatchMode {
-                ReadWatchModeView(repository: repository, editorDraft: $editorDraft, isShowingSettings: $isShowingSettings)
+            if repository.isLibraryMode {
+                LibraryModeView(repository: repository, editorDraft: $editorDraft, isShowingSettings: $isShowingSettings)
             } else if usesCompactNavigation {
                 CompactNavigationView(
                     repository: repository,
@@ -166,7 +166,7 @@ struct ContentView: View {
         .sensoryFeedback(.impact(weight: .light), trigger: repository.undoFeedbackSequence)
         .overlay(alignment: .bottom) {
             // Undo and error messages appear as toasts above the tab bar instead of alerts or list rows.
-            StatusToastHost(repository: repository, bottomInset: usesCompactNavigation || repository.isReadWatchMode ? 64 : TaskFlowTheme.Spacing.large)
+            StatusToastHost(repository: repository, bottomInset: usesCompactNavigation || repository.isLibraryMode ? 64 : TaskFlowTheme.Spacing.large)
         }
         .taskFlowThemedBackground()
         .preferredColorScheme(preferredColorScheme)
@@ -270,8 +270,8 @@ struct ContentView: View {
 
     private var selectedTaskSheetBinding: Binding<Bool> {
         Binding {
-            // Read & Watch Later mode has no detail column, so details open full screen on every device.
-            (usesCompactNavigation || repository.isReadWatchMode) && repository.selectedTaskID != nil
+            // Library has no detail column, so details open full screen on every device.
+            (usesCompactNavigation || repository.isLibraryMode) && repository.selectedTaskID != nil
         } set: { isPresented in
             if !isPresented {
                 repository.selectedTaskID = nil
@@ -795,10 +795,10 @@ private struct CompactNotesTabView: View {
     }
 }
 
-/// Read & Watch Later mode: TaskFlow as a media library. Up Next (a Today page for saved media) comes first, then
-/// each Read & Watch Later list and Upcoming Episodes; Today, Tasks, Calendar and Notes stay out of sight until the
-/// mode is turned off in Settings.
-private struct ReadWatchModeView: View {
+/// Library mode: TaskFlow as a home for saved media. Up Next (a Today page for saved media) comes first, then each
+/// Reading & Watch Later list and Upcoming Episodes; Today, Tasks, Calendar and Notes stay out of sight until
+/// Settings switches back to Planner.
+private struct LibraryModeView: View {
     @Bindable var repository: TaskRepository
     @Binding var editorDraft: TaskDraft?
     @Binding var isShowingSettings: Bool
@@ -811,7 +811,7 @@ private struct ReadWatchModeView: View {
         if repository.accessState != .granted {
             NavigationStack {
                 AccessOverlay(repository: repository)
-                    .navigationTitle("Read & Watch Later")
+                    .navigationTitle("Library")
                     .toolbar { settingsButton }
             }
         } else if !repository.hasLoadedInitialData {
@@ -822,7 +822,7 @@ private struct ReadWatchModeView: View {
         } else {
             TabView(selection: $selection) {
                 NavigationStack {
-                    ReadWatchTodayView(repository: repository)
+                    LibraryUpNextView(repository: repository)
                         .toolbar { settingsButton }
                 }
                 .tabItem { Label("Up Next", systemImage: "play.square.stack") }
@@ -859,8 +859,8 @@ private struct ReadWatchModeView: View {
     private var emptyLibrary: some View {
         Form {
             Section {
-                ContentUnavailableView("No Read & Watch Later Lists", systemImage: "books.vertical",
-                                       description: Text("Create a list for shows, movies, articles and books, or give an existing list the Read & Watch Later layout in Settings › Lists."))
+                ContentUnavailableView("Your Library Is Empty", systemImage: "books.vertical",
+                                       description: Text("Create a list for shows, movies, articles and books, or give an existing list the Reading & Watch Later layout in Settings › Lists."))
             }
             Section {
                 TextField("List Name", text: $newListName).textInputAutocapitalization(.words)
@@ -868,13 +868,13 @@ private struct ReadWatchModeView: View {
                     .disabled(newListName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Section {
-                Button("Show Everything", systemImage: "square.grid.2x2") { repository.appMode = .everything }
-                    .disabled(repository.focusRequestsReadWatchMode)
+                Button("Use TaskFlow as Planner", systemImage: "square.grid.2x2") { repository.appMode = .planner }
+                    .disabled(repository.focusRequestsLibraryMode)
             } footer: {
-                if repository.focusRequestsReadWatchMode { Text("Your current Focus turns on Read & Watch Later mode.") }
+                if repository.focusRequestsLibraryMode { Text("Your current Focus switches TaskFlow to Library.") }
             }
         }
-        .navigationTitle("Read & Watch Later")
+        .navigationTitle("Library")
     }
 
     private var settingsButton: some ToolbarContent {

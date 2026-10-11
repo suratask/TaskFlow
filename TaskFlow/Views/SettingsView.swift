@@ -18,16 +18,16 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("App Mode", selection: $repository.appMode) {
+                    Picker("Use TaskFlow As", selection: $repository.appMode) {
                         ForEach(TaskRepository.AppMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            Text(mode.title).tag(mode)
                         }
                     }
                 } footer: {
-                    if repository.focusRequestsReadWatchMode && repository.appMode == .everything {
-                        Text("Your current Focus turns on Read & Watch Later mode. It switches back when the Focus ends.")
+                    if repository.focusRequestsLibraryMode && repository.appMode == .planner {
+                        Text("Your current Focus switches TaskFlow to Library. It switches back when the Focus ends.")
                     } else {
-                        Text("Read & Watch Later mode turns TaskFlow into a library of the shows, movies, articles and books you've saved. Each Read & Watch Later list gets its own tab, plus Upcoming Episodes; Today, Tasks, Calendar and Notes are hidden until you switch back. Reminders and alerts keep working. A Focus can also turn it on: add TaskFlow in Settings › Focus › Focus Filters.")
+                        Text("Planner is the full app: tasks, calendar and notes. Library turns TaskFlow into a home for the shows, movies, articles and books you've saved, with Up Next, a tab for each Reading & Watch Later list, and Upcoming Episodes. Today, Tasks, Calendar and Notes are hidden until you switch back; reminders and alerts keep working. A Focus can also switch to Library: add TaskFlow in Settings › Focus › Focus Filters.")
                     }
                 }
                 // Five groups: General, Lists, Calendar, Notifications & Permissions, Sync & Data.

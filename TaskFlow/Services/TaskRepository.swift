@@ -18,11 +18,18 @@ final class TaskRepository {
 
         var id: String { rawValue }
     }
-    /// Everything is the full app; Read & Watch Later narrows it to a media library (see ReadWatchModeView).
+    /// Planner is the full app; Library narrows it to saved shows, movies, articles and books (see LibraryModeView).
+    /// Raw values are what 1.16 (1) saved, so they stay as they are; `title` is what people see.
     enum AppMode: String, CaseIterable, Identifiable {
-        case everything = "Everything"
-        case readWatch = "Read & Watch Later"
+        case planner = "Everything"
+        case library = "Read & Watch Later"
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .planner: "Planner"
+            case .library: "Library"
+            }
+        }
     }
     enum AppTheme: String, CaseIterable, Identifiable {
         case system = "System"
@@ -282,9 +289,9 @@ final class TaskRepository {
     var taskSortDirection: TaskSortDirection = .ascending { didSet { preferences.set(taskSortDirection.rawValue, forKey: "TaskFlow.taskSortDirection"); scheduleCloudSync() } }
     var appearanceMode: AppearanceMode = .system { didSet { preferences.set(appearanceMode.rawValue, forKey: "TaskFlow.appearanceMode"); scheduleCloudSync() } }
     /// Kept on this device, like other layout choices that depend on how this device is used.
-    var appMode: AppMode = .everything { didSet { preferences.set(appMode.rawValue, forKey: "TaskFlow.appMode") } }
-    /// Set by the TaskFlow Focus filter, so a Focus such as Evening can switch on Read & Watch Later mode.
-    var focusRequestsReadWatchMode = false
+    var appMode: AppMode = .planner { didSet { preferences.set(appMode.rawValue, forKey: "TaskFlow.appMode") } }
+    /// Set by the TaskFlow Focus filter, so a Focus such as Evening can switch TaskFlow to Library.
+    var focusRequestsLibraryMode = false
     var appTheme: AppTheme = .system {
         didSet {
             preferences.set(appTheme.rawValue, forKey: "TaskFlow.appTheme")
@@ -405,8 +412,8 @@ final class TaskRepository {
         hasCompletedOnboarding = preferences.bool(forKey: "TaskFlow.hasCompletedOnboarding")
         appearanceMode = AppearanceMode(rawValue: preferences.string(forKey: "TaskFlow.appearanceMode") ?? "") ?? .system
         appTheme = (AppTheme(rawValue: preferences.string(forKey: "TaskFlow.appTheme") ?? "") ?? .system).canonical
-        appMode = AppMode(rawValue: preferences.string(forKey: "TaskFlow.appMode") ?? "") ?? .everything
-        focusRequestsReadWatchMode = TaskFlowSharedSettings.defaults.bool(forKey: TaskFlowSharedSettings.focusReadWatchModeKey)
+        appMode = AppMode(rawValue: preferences.string(forKey: "TaskFlow.appMode") ?? "") ?? .planner
+        focusRequestsLibraryMode = TaskFlowSharedSettings.defaults.bool(forKey: TaskFlowSharedSettings.focusLibraryModeKey)
         taskDensity = TaskDensity(rawValue: preferences.string(forKey: "TaskFlow.taskDensity") ?? "") ?? .comfortable
         taskViewMode = (TaskViewMode(rawValue: preferences.string(forKey: "TaskFlow.taskViewMode") ?? "") ?? .list).normalized
         taskGroupOption = TaskGroupOption(rawValue: preferences.string(forKey: "TaskFlow.taskGroupOption") ?? "") ?? .none

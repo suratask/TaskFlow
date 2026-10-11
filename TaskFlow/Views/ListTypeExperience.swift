@@ -1639,10 +1639,9 @@ extension CGImagePropertyOrientation {
     }
 }
 
-/// Read & Watch Later mode's home, a Today page for saved media. It answers "what next?" first with one pick,
-/// then shows what's in progress, newly released, airing this week, and recently saved, across every
-/// Read & Watch Later list.
-struct ReadWatchTodayView: View {
+/// Library mode's home, a Today page for saved media. It answers "what next?" first with one pick, then shows
+/// what's in progress, newly released, airing this week, and recently saved, across every Reading & Watch Later list.
+struct LibraryUpNextView: View {
     @Bindable var repository: TaskRepository
     @Environment(\.openURL) private var openURL
     @State private var now = Date()

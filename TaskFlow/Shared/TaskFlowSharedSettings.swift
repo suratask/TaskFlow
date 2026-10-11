@@ -16,8 +16,8 @@ enum TaskFlowSharedSettings {
     static let focusListIDsKey = "TaskFlow.focusListIDs"
     /// Which reminder lists and event calendars the user turned off in TaskFlow, shared so widgets hide them too.
     static let usesRemindersKey = "TaskFlow.usesReminders"
-    /// Set by the Focus filter while a Focus asks for Read & Watch Later mode.
-    static let focusReadWatchModeKey = "TaskFlow.focusReadWatchMode"
+    /// Set by the Focus filter while a Focus asks for Library mode. The stored name predates the rename.
+    static let focusLibraryModeKey = "TaskFlow.focusReadWatchMode"
     static let usesCalendarsKey = "TaskFlow.usesCalendars"
     static let disabledReminderListIDsKey = "TaskFlow.disabledReminderListIDs"
     static let disabledEventCalendarIDsKey = "TaskFlow.disabledEventCalendarIDs"

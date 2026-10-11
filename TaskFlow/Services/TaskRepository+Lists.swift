@@ -1006,12 +1006,12 @@ extension TaskRepository {
     /// Re-applies reminders after list options that affect them change.
     func refreshDeadlineReminders() async { await rescheduleNotifications() }
 
-    // MARK: Read & Watch Later mode
+    // MARK: Library mode
 
-    /// The app shows only Read & Watch Later lists when the user chose that mode or a Focus asks for it.
-    var isReadWatchMode: Bool { appMode == .readWatch || focusRequestsReadWatchMode }
+    /// The app shows only Reading & Watch Later lists when the user chose Library or a Focus asks for it.
+    var isLibraryMode: Bool { appMode == .library || focusRequestsLibraryMode }
     var readingLists: [TaskList] { lists.filter { listProfile($0.id).type == .reading } }
-    /// Creates a reminder list with the Read & Watch Later layout, for starting the mode with no such list yet.
+    /// Creates a reminder list with the Reading & Watch Later layout, for starting Library with no such list yet.
     func createReadingList(named name: String) async {
         let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
