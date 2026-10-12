@@ -30,9 +30,55 @@ function inlineOps(text, attributes = {}) {
   }
   add(text.slice(offset)); return ops;
 }
+// MARK: - Tables
+
+/// A Markdown table row: "| a | b |". Pipes inside a cell are written "\\|".
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+/// The line under a table's first row: "| --- | :---: |".
+const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+export const isTableRule = line => TABLE_RULE.test(line) && line.includes('-');
+/// The cells of a row, unescaped.
+export function tableCells(line) {
+  const inner = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells = []; let cell = '';
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] === '\\' && inner[i + 1] === '|') { cell += '|'; i++; }
+    else if (inner[i] === '|') { cells.push(cell.trim()); cell = ''; }
+    else cell += inner[i];
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+/// Where a table starts at `index`: its rows (header first), and how many lines it takes.
+export function tableAt(lines, index) {
+  if (!TABLE_ROW.test(lines[index] ?? '') || !isTableRule(lines[index + 1] ?? '')) return null;
+  const rows = [tableCells(lines[index])];
+  let end = index + 2;
+  while (end < lines.length && TABLE_ROW.test(lines[end]) && !isTableRule(lines[end])) rows.push(tableCells(lines[end++]));
+  return {rows, length: end - index};
+}
+let rowSerial = 0;
+const newRowID = () => 'row-' + Date.now().toString(36) + '-' + (rowSerial++).toString(36);
+
 export function markdownToDelta(text, format = 'markdown') {
   const ops = [];
-  for (const line of text.split('\n')) {
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    // A table becomes a grid: one line per cell, all of a row's cells sharing its id.
+    const table = format === 'markdown' ? tableAt(lines, index) : null;
+    if (table) {
+      const columns = Math.max(...table.rows.map(row => row.length));
+      for (const row of table.rows) {
+        const id = newRowID();
+        for (let column = 0; column < columns; column++) {
+          ops.push(...inlineOps(row[column] ?? ''));
+          ops.push({insert: '\n', attributes: {table: id}});
+        }
+      }
+      index += table.length - 1;
+      continue;
+    }
     let body = line, attributes = {};
     if (format === 'bullets') attributes.list = 'bullet';
     else if (format === 'checklist') attributes.list = 'unchecked';
@@ -80,6 +126,23 @@ export function deltaToMarkdown(delta) {
     } else numbers.clear();
     lines.push(prefix + renderLine());
   }
+  /// A table's cells as they arrive: rows of cell text, by row id.
+  let table = null;
+  function finishTable() {
+    if (!table) return;
+    const columns = Math.max(1, ...table.map(row => row.cells.length));
+    const render = cells => '| ' + Array.from({length: columns}, (_, i) => (cells[i] ?? '').replace(/\|/g, '\\|')).join(' | ') + ' |';
+    lines.push(render(table[0].cells));
+    lines.push('| ' + Array(columns).fill('---').join(' | ') + ' |');
+    for (const row of table.slice(1)) lines.push(render(row.cells));
+    table = null; numbers.clear();
+  }
+  function finishCell(id) {
+    const text = renderLine();
+    if (!table) table = [];
+    const last = table[table.length - 1];
+    if (last && last.id === id) last.cells.push(text); else table.push({id, cells: [text]});
+  }
   for (const op of delta.ops ?? []) {
     if (typeof op.insert !== 'string') continue; // Image uploads are outside this first version.
     const parts = op.insert.split('\n');
@@ -90,9 +153,25 @@ export function deltaToMarkdown(delta) {
         const text = link && !isBareLink(part, link) ? `[${part}](${link})` : part;
         segments.push({text, style: (attributes.bold ? 'b' : '') + (attributes.italic ? 'i' : '')});
       }
-      if (index < parts.length - 1) finish(attributes);
+      if (index < parts.length - 1) {
+        if (attributes.table) finishCell(attributes.table);
+        else { finishTable(); finish(attributes); }
+      }
     });
   }
+  finishTable();
   if (segments.length) lines.push(renderLine());
   return lines.join('\n');
+}
+
+/// Tables as readable lines, for previews: "Milk · 3.48", no rules or pipes.
+export function tablesAsText(text) {
+  const lines = text.split('\n'), out = [];
+  for (let index = 0; index < lines.length; index++) {
+    const table = tableAt(lines, index);
+    if (!table) { out.push(lines[index]); continue; }
+    for (const row of table.rows) out.push(row.filter(Boolean).join(' · '));
+    index += table.length - 1;
+  }
+  return out.join('\n');
 }

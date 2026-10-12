@@ -15,7 +15,7 @@
 // - The list holds its order while a note is being edited.
 import {CloudNotesProvider, DemoNotesProvider, NoteConflict, newNote, visibleNotes, isDeleted, isPinned, canTrash, plainPreview, safeLink, needsSignIn,
   isPurged, purgedNote, tagColor, tagStats, frequentTags, folderStats, noteBadges} from '../core.mjs';
-import {markdownToDelta, deltaToMarkdown, URL_PATTERN, linkTarget} from './rich-text.mjs';
+import {markdownToDelta, deltaToMarkdown, URL_PATTERN, linkTarget, tablesAsText} from './rich-text.mjs';
 /// A tag's colour: the one chosen in the app, else the app's default for it.
 const colorOf = tag => tagColor(tag, provider?.tagColors);
 const profile = window.NOTES_CONFIG?.profile ?? {}, features = profile.features ?? {};
@@ -35,8 +35,9 @@ let orderLock = null, shownOrder = [];
 let cardFocusPending = false;
 
 // No uploader: images and files are added in the app (see the paste and drop handlers).
-const rich = new Quill('#note-body', {modules: {toolbar: false, history: {userOnly: true}, uploader: {mimetypes: []}},
-  formats: ['bold', 'italic', 'link', 'header', 'list', 'blockquote', 'indent'], placeholder: 'Start writing…'});
+const rich = new Quill('#note-body', {modules: {toolbar: false, history: {userOnly: true}, uploader: {mimetypes: []}, table: true,
+    keyboard: {bindings: {'table tab': {key: 'Tab', shiftKey: null, format: ['table'], handler: (range, context) => tableTab(range, context)}}}},
+  formats: ['bold', 'italic', 'link', 'header', 'list', 'blockquote', 'indent', 'table'], placeholder: 'Start writing…'});
 rich.root.setAttribute('role', 'textbox'); rich.root.setAttribute('aria-label', 'Note text'); rich.root.setAttribute('aria-multiline', 'true');
 
 // MARK: - Status
@@ -287,8 +288,9 @@ function relativeDate(value) {
 }
 /// The title the app shows: the note's title, else its first line.
 function cardText(note) {
-  if (note.title.trim()) return {title: note.title.trim(), preview: plainPreview(note.body)};
-  const lines = note.body.split('\n'), first = lines.findIndex(line => line.trim());
+  const body = tablesAsText(note.body);
+  if (note.title.trim()) return {title: note.title.trim(), preview: plainPreview(body)};
+  const lines = body.split('\n'), first = lines.findIndex(line => line.trim());
   if (first < 0) return {title: 'New Note', preview: ''};
   return {title: plainPreview(lines[first], 80) || 'New Note', preview: plainPreview(lines.slice(first + 1).join('\n'))};
 }
@@ -676,6 +678,8 @@ const HELP_SECTIONS = () => [
   {title: 'In a note', rows: [
     {label: 'Tick a checklist item', help: 'Click its circle, or `⌘Return`'},
     {label: 'Indent a list item', help: '`Tab`, or `⇧Tab` to undo'},
+    {label: 'Move between table cells', help: '`Tab` and `⇧Tab`; `Tab` in the last cell adds a row'},
+    {label: 'Add, move or delete a row or column', help: 'Click the `⋯` on its edge'},
     {label: 'Open a link', help: '`⌘`-click it, or tap on a phone'},
     {label: 'Save now', help: '`⌘S`, though notes save as you type'},
     {label: 'Add a tag', help: 'Type it below the note, then `Return`'},
@@ -772,6 +776,7 @@ for (const button of document.querySelectorAll('[data-format]')) {
     if (!draft) return;
     const range = rich.getSelection(true), format = rich.getFormat(range), action = button.dataset.format;
     if (action === 'bold' || action === 'italic') rich.format(action, !format[action], 'user');
+    else if (format.table) return; // A cell is one line of text; lists and headings would break the table.
     else if (action === 'heading') rich.formatLine(range.index, range.length, 'header', format.header ? false : 2, 'user');
     else {
       const value = {bullet: 'bullet', number: 'ordered', checklist: 'unchecked'}[action];
@@ -781,6 +786,181 @@ for (const button of document.querySelectorAll('[data-format]')) {
     updateFormatState();
   });
 }
+
+// MARK: - Tables
+
+/// Notes' tables are Markdown tables in the text; here they're a grid, like
+/// Apple Notes: Tab moves between cells (and adds a row at the end), and the
+/// handles on the current row and column open their menus.
+const tables = rich.getModule('table');
+function tableAt(range = rich.getSelection()) {
+  if (!range || !rich.getFormat(range).table) return null;
+  const [table, row, cell] = tables.getTable(range);
+  return table && row && cell ? {table, row, cell} : null;
+}
+function tableTab(range, context) {
+  const at = tableAt(range);
+  if (!at) return true;
+  const start = context.line.offset(rich.scroll);
+  if (context.event.shiftKey) {
+    if (at.cell.prev || at.row.prev) rich.setSelection(start - 1, 0, 'user');
+    return false;
+  }
+  if (!at.cell.next && !at.row.next) {
+    tables.insertRowBelow();
+    const added = at.row.next?.children.head;
+    if (added) rich.setSelection(rich.getIndex(added), 0, 'user');
+  } else rich.setSelection(start + context.line.length(), 0, 'user');
+  return false;
+}
+/// A new table starts on a line of its own: two rows of four columns.
+function insertTable() {
+  if (!draft || isDeleted(draft) || bodyLocked()) return;
+  const range = rich.getSelection(true);
+  if (rich.getFormat(range).table) return;
+  const [line] = rich.getLine(range.index);
+  let index = range.index;
+  if (line && line.length() > 1) {
+    index = rich.getIndex(line) + line.length() - 1;
+    rich.insertText(index, '\n', 'user');
+    index += 1;
+  }
+  rich.formatLine(index, 0, {list: false, header: false, blockquote: false, indent: false}, 'user');
+  rich.setSelection(index, 0, 'silent');
+  tables.insertTable(2, 4);
+  rich.setSelection(index, 0, 'user');
+  placeTableHandles();
+}
+$('table-button').addEventListener('mousedown', event => event.preventDefault());
+$('table-button').addEventListener('click', insertTable);
+
+/// Moves the current row (-1 up, 1 down) or column (-1 left, 1 right).
+function moveRow(by) {
+  const at = tableAt(); if (!at) return;
+  const column = at.row.children.indexOf(at.cell);
+  if (by < 0 && at.row.prev) at.row.parent.insertBefore(at.row, at.row.prev);
+  else if (by > 0 && at.row.next) at.row.parent.insertBefore(at.row.next, at.row);
+  else return;
+  rich.update('user');
+  const cell = at.row.children.at(column);
+  if (cell) rich.setSelection(rich.getIndex(cell), 0, 'user');
+}
+function moveColumn(by) {
+  const at = tableAt(); if (!at) return;
+  const column = at.row.children.indexOf(at.cell), target = column + by;
+  if (target < 0 || target >= at.row.children.length) return;
+  for (const row of at.table.descendants(at.row.constructor)) {
+    const cell = row.children.at(column), other = row.children.at(target);
+    if (!cell || !other) continue;
+    if (by < 0) row.insertBefore(cell, other); else row.insertBefore(other, cell);
+  }
+  rich.update('user');
+  rich.setSelection(rich.getIndex(at.cell), 0, 'user');
+}
+function deleteRowOrTable() {
+  const at = tableAt(); if (!at) return;
+  if (!at.row.prev && !at.row.next) tables.deleteTable(); else tables.deleteRow();
+}
+function deleteColumnOrTable() {
+  const at = tableAt(); if (!at) return;
+  if (at.row.children.length <= 1) tables.deleteTable(); else tables.deleteColumn();
+}
+const TABLE_MENUS = {
+  column: () => [
+    ['Add Column Before', () => tables.insertColumnLeft()],
+    ['Add Column After', () => tables.insertColumnRight()],
+    tableAt()?.cell.prev ? ['Move Column Left', () => moveColumn(-1)] : undefined,
+    tableAt()?.cell.next ? ['Move Column Right', () => moveColumn(1)] : undefined,
+    ['Delete Column', deleteColumnOrTable, true],
+    null,
+    ['Delete Table', () => tables.deleteTable(), true],
+  ],
+  row: () => [
+    ['Add Row Above', () => tables.insertRowAbove()],
+    ['Add Row Below', () => tables.insertRowBelow()],
+    tableAt()?.row.prev ? ['Move Row Up', () => moveRow(-1)] : undefined,
+    tableAt()?.row.next ? ['Move Row Down', () => moveRow(1)] : undefined,
+    ['Delete Row', deleteRowOrTable, true],
+    null,
+    ['Delete Table', () => tables.deleteTable(), true],
+  ],
+};
+let tableMenuKind = null;
+function openTableMenu(kind) {
+  const menu = $('table-menu'), handle = $(kind === 'column' ? 'table-col-handle' : 'table-row-handle');
+  if (tableMenuKind === kind) { closeTableMenu(); return; }
+  menu.replaceChildren(...TABLE_MENUS[kind]().filter(item => item !== undefined).map(item => {
+    if (!item) { const line = document.createElement('div'); line.className = 'table-menu-sep'; line.setAttribute('role', 'separator'); return line; }
+    const [label, action, danger] = item, button = document.createElement('button');
+    button.type = 'button'; button.textContent = label; button.setAttribute('role', 'menuitem');
+    if (danger) button.classList.add('danger');
+    button.addEventListener('mousedown', event => event.preventDefault());
+    button.addEventListener('click', () => { closeTableMenu(); action(); placeTableHandles(); });
+    return button;
+  }));
+  tableMenuKind = kind; menu.hidden = false;
+  handle.setAttribute('aria-expanded', 'true');
+  const box = handle.getBoundingClientRect(), width = menu.offsetWidth, height = menu.offsetHeight;
+  menu.style.left = Math.max(8, Math.min(innerWidth - width - 8, kind === 'column' ? box.left + box.width / 2 - width / 2 : box.right + 6)) + 'px';
+  menu.style.top = Math.max(8, Math.min(innerHeight - height - 8, kind === 'column' ? box.bottom + 6 : box.top)) + 'px';
+  menu.querySelector('button')?.focus({preventScroll: true});
+}
+function closeTableMenu() {
+  if (!tableMenuKind) return;
+  tableMenuKind = null; $('table-menu').hidden = true;
+  for (const id of ['table-col-handle', 'table-row-handle']) $(id).setAttribute('aria-expanded', 'false');
+}
+/// The ⋯ handles sit on the current column's top edge and the current row's left edge.
+function placeTableHandles() {
+  const at = draft && !bodyLocked() ? tableAt() : null;
+  const column = $('table-col-handle'), row = $('table-row-handle');
+  $('table-button').setAttribute('aria-pressed', String(Boolean(at)));
+  if (!at) { column.hidden = row.hidden = true; closeTableMenu(); return; }
+  const view = $('editor').getBoundingClientRect(), table = at.table.domNode.getBoundingClientRect();
+  const cell = at.cell.domNode.getBoundingClientRect(), line = at.row.domNode.getBoundingClientRect();
+  const inside = (x, y) => x >= view.left && x <= view.right && y >= view.top && y <= view.bottom;
+  const columnX = cell.left + cell.width / 2, rowY = line.top + line.height / 2;
+  column.hidden = !inside(columnX, table.top); row.hidden = !inside(table.left, rowY);
+  column.style.left = columnX + 'px'; column.style.top = table.top + 'px';
+  row.style.left = table.left + 'px'; row.style.top = rowY + 'px';
+}
+for (const [id, kind] of [['table-col-handle', 'column'], ['table-row-handle', 'row']]) {
+  $(id).addEventListener('mousedown', event => event.preventDefault());
+  $(id).addEventListener('click', () => openTableMenu(kind));
+}
+rich.on('editor-change', () => requestAnimationFrame(placeTableHandles));
+$('editor').addEventListener('scroll', () => { closeTableMenu(); placeTableHandles(); }, {passive: true});
+addEventListener('resize', placeTableHandles);
+document.addEventListener('mousedown', event => {
+  if (tableMenuKind && !$('table-menu').contains(event.target) && !event.target.closest?.('.table-handle')) closeTableMenu();
+});
+$('table-menu').addEventListener('keydown', event => {
+  const items = [...$('table-menu').querySelectorAll('button')], at = items.indexOf(document.activeElement);
+  if (event.key === 'Escape') { event.preventDefault(); closeTableMenu(); rich.focus(); }
+  else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault(); items[(at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+  }
+});
+
+// MARK: - Opening a note from a link
+
+/// The app links a note as ".../notes/#note=<id>" (its table, say); it opens
+/// once the notes have loaded. The address keeps nothing secret: signing in
+/// still decides who can read it.
+function linkedNoteID() {
+  const match = location.hash.match(/(?:^#|&)note=([0-9A-Fa-f-]{36})/);
+  return match ? match[1].toUpperCase() : null;
+}
+function openLinkedNote() {
+  const id = linkedNoteID();
+  if (!id) return;
+  const note = notes.find(item => item.id.toUpperCase() === id && !isPurged(item));
+  if (!note) return;
+  history.replaceState(history.state, '', location.pathname + location.search);
+  if (draft?.id !== note.id) selectNote(note.id);
+  else $('workspace').classList.add('show-editor');
+}
+addEventListener('hashchange', openLinkedNote);
 
 // MARK: - Completed checklist items
 
@@ -1260,6 +1440,9 @@ function handleSingleKey(event) {
 // In a note: ⇧⌘9 makes the line a checklist; ⌘Return ticks or unticks a
 // checklist item. Caught before the editor's own keys see them.
 rich.root.addEventListener('keydown', event => {
+  if ((isApple ? event.metaKey : event.ctrlKey) && event.altKey && !event.shiftKey && event.code === 'KeyT') {
+    event.preventDefault(); event.stopPropagation(); insertTable(); return;
+  }
   if (!(isApple ? event.metaKey : event.ctrlKey) || event.altKey) return;
   if (event.shiftKey && event.code === 'Digit9') { event.preventDefault(); event.stopPropagation(); document.querySelector('[data-format="checklist"]').click(); }
   else if (!event.shiftKey && event.key === 'Enter') {
@@ -1306,6 +1489,7 @@ async function initializeWorkspace(user, currentSession) {
   try { reopen = sessionStorage.getItem(reopenKey); } catch { /* Nothing to reopen. */ }
   const previous = !draft && reopen && notes.find(note => note.id === reopen && !isPurged(note));
   if (previous) openNote(previous);
+  openLinkedNote();
   checkForUpdate();
 }
 async function loadCloudKit() {

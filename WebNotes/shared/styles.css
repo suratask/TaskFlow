@@ -318,3 +318,26 @@ dialog h2 { margin-top: 0; font-size: 19px; }
   .app.expanded .editor > :not(.sr-only) { max-width: 1400px; }
 }
 @media (max-width: 680px) { #expand-note { display: none; } }
+
+/* Tables: a quiet grid like Apple Notes. The ⋯ handles sit on the current
+   column's top edge and the current row's left edge. */
+.note-body .ql-editor table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: .5em 0; }
+.note-body .ql-editor table td { border: 1px solid var(--line); padding: 7px 10px; min-width: 3em; vertical-align: top; line-height: 1.45; overflow-wrap: anywhere; }
+.note-body .ql-editor table td:focus-within { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.table-handle { position: fixed; z-index: 30; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); color: var(--muted); box-shadow: 0 1px 4px rgba(0, 0, 0, .12); cursor: pointer; }
+.table-handle.column { width: 30px; height: 16px; transform: translate(-50%, -50%); }
+.table-handle.row { width: 16px; height: 30px; transform: translate(-50%, -50%); }
+.table-handle:hover, .table-handle[aria-expanded="true"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.table-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.table-menu { position: fixed; z-index: 40; min-width: 190px; padding: 5px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg); box-shadow: var(--shadow); display: flex; flex-direction: column; }
+.table-menu[hidden] { display: none; }
+.table-menu button { text-align: left; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }
+.table-menu button:hover, .table-menu button:focus-visible { background: var(--hover); outline: none; }
+.table-menu button.danger { color: var(--danger); }
+.table-menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+@media (hover: none) {
+  .table-handle.column { width: 40px; height: 22px; }
+  .table-handle.row { width: 22px; height: 40px; }
+}
