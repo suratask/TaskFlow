@@ -782,7 +782,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlowWidgets/TaskFlowWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowWidgets/Resources/Info.plist;
@@ -871,7 +871,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlow/TaskFlow.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlow/Resources/Info.plist;
@@ -903,7 +903,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlowWidgets/TaskFlowWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowWidgets/Resources/Info.plist;
@@ -1031,7 +1031,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = TaskFlowShareExtension/TaskFlowShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowShareExtension/Info.plist;
@@ -1052,7 +1052,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = TaskFlowShareExtension/TaskFlowShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = RUS98YNC4X;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlowShareExtension/Info.plist;
@@ -1077,7 +1077,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TaskFlow/TaskFlowDevelopment.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TaskFlow/Resources/Info.plist;
