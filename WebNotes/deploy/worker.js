@@ -8,6 +8,24 @@ const HEADERS = {
   'X-Served-By': 'taskflow-notes'
 };
 
+/// Keeps the iCloud sign-in. CloudKit JS saves its session in a cookie written
+/// from script: 14 days, no Path (so the page's folder), and Safari cuts script
+/// cookies to 7 days. When a page request carries exactly one copy, it's sent
+/// back as a server cookie good for 400 days, with the same name and path so it
+/// replaces that copy instead of adding a second (two copies break sign-in,
+/// "Could not read or write ckSession"). Nothing is stored here; signing out
+/// still deletes it, since CloudKit clears the same cookie.
+const SESSION_COOKIE = 'iCloud.com.surratt.TaskFlow';
+const SESSION_PATH = '/';
+const KEEP_SECONDS = 400 * 24 * 3600;
+function keepSession(request, headers) {
+  const copies = (request.headers.get('Cookie') || '').split(/;\s*/).filter(part => part.startsWith(SESSION_COOKIE + '='));
+  if (copies.length !== 1) return;
+  const value = copies[0].slice(SESSION_COOKIE.length + 1);
+  if (!value || value === 'null' || /[\s;,]/.test(value)) return;
+  headers.append('Set-Cookie', `${SESSION_COOKIE}=${value}; Max-Age=${KEEP_SECONDS}; Path=${SESSION_PATH}; Secure; SameSite=Lax`);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -38,6 +56,7 @@ export default {
     }
     const headers = new Headers(response.headers);
     for (const [name, value] of Object.entries(HEADERS)) headers.set(name, value);
+    if (url.pathname === '/notes.html') keepSession(request, headers);
     return new Response(response.body, {status: response.status, statusText: response.statusText, headers});
   }
 };
