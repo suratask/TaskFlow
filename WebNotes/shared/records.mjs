@@ -46,3 +46,13 @@ export async function queryAll(database, recordType, cache, check) {
   // still the newest copy we have.
   return listing.map(record => cache.get(record.recordName)).filter(Boolean);
 }
+
+/// How to install the page as an app in browsers without an install prompt.
+export function installSteps(userAgent = globalThis.navigator?.userAgent ?? '', maxTouchPoints = globalThis.navigator?.maxTouchPoints ?? 0) {
+  const iOS = /iPhone|iPad|iPod/.test(userAgent) || (/Macintosh/.test(userAgent) && maxTouchPoints > 1);
+  const safari = /Safari\//.test(userAgent) && !/Chrome|Chromium|CriOS|Edg|OPR|Firefox|FxiOS/.test(userAgent);
+  if (iOS) return 'To install: tap the Share button, then Add to Home Screen.';
+  if (safari) return 'To install: in Safari, choose File › Add to Dock.';
+  if (/Firefox/.test(userAgent)) return 'Firefox can’t install web apps. Open this page in Safari, Chrome or Edge to install it.';
+  return 'To install: use the Install button in the address bar, or choose Install from the browser’s menu.';
+}

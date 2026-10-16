@@ -1362,6 +1362,25 @@ $('theme-toggle').onclick = () => {
 };
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 applyTheme();
+
+import {installSteps} from './records.mjs';
+// Install as an app. Chrome and Edge offer an install prompt, held until the
+// button is used; Safari has none, so the button explains Add to Dock / Add
+// to Home Screen. Hidden once the page is running as an installed app.
+let installPrompt = null;
+const isInstalledApp = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+$('install-app').hidden = isInstalledApp();
+addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; });
+addEventListener('appinstalled', () => {
+  installPrompt = null; $('install-app').hidden = true;
+  $('install-help').textContent = 'Installed. Open it from your Dock, Start menu or Home Screen; you may need to sign in to iCloud once more there.';
+  $('install-help').hidden = false;
+});
+$('install-app').onclick = async () => {
+  if (!installPrompt) { $('install-help').textContent = installSteps(); $('install-help').hidden = !$('install-help').hidden; return; }
+  const prompt = installPrompt; installPrompt = null;
+  try { await prompt.prompt(); await prompt.userChoice; } catch { /* The browser declined to show it. */ }
+};
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 's') { event.preventDefault(); flush(); }
   else if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k' && rich.hasFocus()) { event.preventDefault(); openLinkBar(); }
