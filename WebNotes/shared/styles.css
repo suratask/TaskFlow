@@ -279,6 +279,19 @@ dialog h2 { margin-top: 0; font-size: 19px; }
   .conflict-columns { grid-template-columns: 1fr; }
 }
 
+/* Touch screens: finger-sized targets (about 40 points) without changing the mouse layout. */
+@media (pointer: coarse) {
+  .icon-button { width: 40px; height: 40px; }
+  .editor-toolbar .icon-button { width: 40px; }
+  .format-bar button { min-width: 40px; min-height: 40px; }
+  .nav-item { min-height: 40px; }
+  .heading-toggle { min-height: 36px; }
+  .heading-action { display: inline-flex; align-items: center; min-height: 36px; padding: 0 10px; font-size: 13px; }
+  .text-button { min-height: 36px; }
+  .tag-pill { padding-top: 4px; padding-bottom: 4px; }
+  .tag-pill .remove { min-width: 28px; min-height: 28px; margin: -4px -4px -4px 0; font-size: 16px; }
+}
+
 /* Formatting help: a wide reference in cards, keys drawn as keycaps. */
 .help-dialog { max-width: 940px; padding: 0; max-height: min(88vh, 920px); overflow: hidden; }
 .help-dialog[open] { display: flex; flex-direction: column; }
